@@ -1,0 +1,18 @@
+# Root ignore
+backend/node_modules/
+frontend/node_modules/
+frontend/.next/
+backend/media/tmp/
+
+# Env
+backend/.env
+frontend/.env
+frontend/.env.local
+
+# Runtime data (keep seeded json + media in repo)
+backend/data/app.sqlite
+backend/data/app.sqlite-*
+
+# OS/editor
+.DS_Store
+Thumbs.db
