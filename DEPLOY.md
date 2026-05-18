@@ -32,12 +32,22 @@ EVALUATION_TOKEN_SECRET=<long_random_string>
 COOKIE_SECURE=true
 COOKIE_SAME_SITE=none
 TRUST_PROXY=true
+YOOKASSA_API_URL=https://api.yookassa.ru/v3
+YOOKASSA_SHOP_ID=<your_shop_id>
+YOOKASSA_SECRET_KEY=<your_secret_key>
+BILLING_PRO_MONTHLY_PRICE_RUB=490.00
+BILLING_PRO_PLAN_CODE=pro-monthly
+BILLING_PRO_PLAN_TITLE=Pro subscription
+BILLING_RETURN_URL=https://<your-frontend-domain>/profile
 ```
 
 Notes:
 
 - Attach a persistent disk and mount it for app data/media persistence.
 - `PORT` is managed by Render automatically.
+- In YooKassa dashboard set webhook URL to:
+  `https://<your-backend-domain>/api/billing/yookassa/webhook`
+  and subscribe to at least `payment.succeeded` and `payment.canceled`.
 
 ## 2) Frontend (Vercel)
 
@@ -62,3 +72,9 @@ NEXT_PUBLIC_BACKEND_URL=https://<your-backend-domain>
 ```env
 ADMIN_BOOTSTRAP_ENABLED=false
 ```
+
+- Validate payment flow:
+  1. login as normal user;
+  2. start PRO payment from `/profile`;
+  3. finish payment in YooKassa test/production form;
+  4. return to `/profile` and confirm tariff is `PRO`.

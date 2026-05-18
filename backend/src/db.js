@@ -91,6 +91,31 @@ function createSchema(db) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_rate_limits_reset_at ON rate_limits(reset_at);
+
+    CREATE TABLE IF NOT EXISTS billing_payments (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      plan_code TEXT NOT NULL,
+      amount_value TEXT NOT NULL,
+      amount_currency TEXT NOT NULL,
+      status TEXT NOT NULL,
+      paid INTEGER NOT NULL DEFAULT 0,
+      confirmation_url TEXT NOT NULL DEFAULT '',
+      return_url TEXT NOT NULL DEFAULT '',
+      idempotence_key TEXT NOT NULL DEFAULT '',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      raw_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_billing_payments_user_created
+      ON billing_payments(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_billing_payments_status
+      ON billing_payments(status);
   `);
 }
 

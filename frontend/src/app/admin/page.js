@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequest, getBackendUrl, setAuthSession } from "@/lib/api";
 
 const QUESTION_COUNT = 6;
@@ -221,12 +221,63 @@ function getAudioTargets(test) {
   return targets;
 }
 
+function getAudioCompletionStats(test) {
+  const paths = getAudioTargets(test);
+  const filled = paths.filter((target) => {
+    const chunks = target.pathValue.split(".");
+    let cursor = test;
+    for (const chunk of chunks) {
+      if (cursor == null) {
+        return false;
+      }
+      const maybeNumber = Number(chunk);
+      if (Array.isArray(cursor) && Number.isInteger(maybeNumber)) {
+        cursor = cursor[maybeNumber];
+        continue;
+      }
+      cursor = cursor[chunk];
+    }
+    return Boolean(String(cursor || "").trim());
+  }).length;
+
+  return {
+    filled,
+    total: paths.length,
+    missing: Math.max(0, paths.length - filled),
+  };
+}
+
+function createDuplicateDraft(source) {
+  const cloned = ensureEditableTest(source);
+  delete cloned.id;
+  delete cloned.createdAt;
+  delete cloned.updatedAt;
+  cloned.status = "draft";
+  cloned.source = "manual";
+  cloned.title = `${cloned.title || "Вариант"} (копия)`;
+  return cloned;
+}
+
 function AudioPreview({ backendUrl, src }) {
   const resolved = resolveMediaUrl(backendUrl, src);
   if (!resolved) {
     return null;
   }
   return <audio controls src={resolved} className="mt-2 w-full" />;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0 B";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export default function AdminPage() {
@@ -237,6 +288,9 @@ export default function AdminPage() {
   const [users, setUsers] = useState([]);
   const [selectedId, setSelectedId] = useState("");
   const [draftTest, setDraftTest] = useState(createBlankTest());
+  const [savedFingerprint, setSavedFingerprint] = useState(toPrettyJson(createBlankTest()));
+  const [testSearch, setTestSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const [audioFile, setAudioFile] = useState(null);
   const [audioTargetPath, setAudioTargetPath] = useState("tasks.task1.referenceAudioUrl");
@@ -257,8 +311,34 @@ export default function AdminPage() {
   const [bootstrapPassword, setBootstrapPassword] = useState("");
   const [bootstrapDisplayName, setBootstrapDisplayName] = useState("");
   const [bootstrapKey, setBootstrapKey] = useState("");
+  const audioInputRef = useRef(null);
 
   const audioTargets = useMemo(() => getAudioTargets(draftTest), [draftTest]);
+  const audioStats = useMemo(() => getAudioCompletionStats(draftTest), [draftTest]);
+  const hasUnsavedChanges = useMemo(
+    () => toPrettyJson(ensureEditableTest(draftTest)) !== savedFingerprint,
+    [draftTest, savedFingerprint]
+  );
+  const filteredTests = useMemo(() => {
+    const q = testSearch.trim().toLowerCase();
+    return tests.filter((item) => {
+      if (statusFilter !== "all" && item.status !== statusFilter) {
+        return false;
+      }
+
+      if (!q) {
+        return true;
+      }
+      const searchTarget = `${item.title || ""} ${item.id || ""} ${item.source || ""}`.toLowerCase();
+      return searchTarget.includes(q);
+    });
+  }, [statusFilter, testSearch, tests]);
+  const testsStats = useMemo(() => {
+    const published = tests.filter((item) => item.status === "published").length;
+    const draft = tests.length - published;
+    const ai = tests.filter((item) => item.source === "ai").length;
+    return { published, draft, ai };
+  }, [tests]);
 
   useEffect(() => {
     if (!audioTargets.length) {
@@ -272,8 +352,10 @@ export default function AdminPage() {
 
   const syncDraftFromServerItem = useCallback((source) => {
     const editable = ensureEditableTest(source);
+    const fingerprint = toPrettyJson(editable);
     setDraftTest(editable);
-    setRawEditorValue(toPrettyJson(editable));
+    setRawEditorValue(fingerprint);
+    setSavedFingerprint(fingerprint);
   }, []);
 
   const refreshTests = useCallback(
@@ -368,6 +450,14 @@ export default function AdminPage() {
   };
 
   const handleSelectTest = (id) => {
+    if (hasUnsavedChanges && selectedId && selectedId !== id) {
+      const confirmed = window.confirm(
+        "Есть несохранённые изменения в текущем варианте. Переключиться без сохранения?"
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
     setSelectedId(id);
     const source = tests.find((item) => item.id === id);
     if (source) {
@@ -376,10 +466,27 @@ export default function AdminPage() {
   };
 
   const handleCreateDraft = () => {
+    if (hasUnsavedChanges && selectedId) {
+      const confirmed = window.confirm(
+        "Есть несохранённые изменения в текущем варианте. Создать новый draft без сохранения этих правок?"
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
     setSelectedId("");
     const blank = createBlankTest();
     syncDraftFromServerItem(blank);
     setInfo("Создан пустой черновик. Заполните поля и нажмите «Сохранить вариант».");
+    setError("");
+  };
+
+  const handleDuplicateCurrent = () => {
+    const duplicated = createDuplicateDraft(draftTest);
+    setSelectedId("");
+    setDraftTest(duplicated);
+    setRawEditorValue(toPrettyJson(duplicated));
+    setInfo("Текущий вариант скопирован в новый draft. Нажмите «Сохранить вариант».");
     setError("");
   };
 
@@ -422,6 +529,45 @@ export default function AdminPage() {
     }
   };
 
+  const handleSaveAndPublish = async () => {
+    setSaving(true);
+    setError("");
+    setInfo("");
+    try {
+      const payload = ensureEditableTest(draftTest);
+      let activeId = selectedId;
+
+      if (activeId) {
+        await apiRequest(`/api/admin/tests/${activeId}`, {
+          method: "PUT",
+          body: {
+            ...payload,
+            id: activeId,
+          },
+        });
+      } else {
+        const created = await apiRequest("/api/admin/tests", {
+          method: "POST",
+          body: payload,
+        });
+        activeId = created.test?.id || "";
+      }
+
+      if (!activeId) {
+        throw new Error("Не удалось определить ID варианта для публикации");
+      }
+
+      await apiRequest(`/api/admin/tests/${activeId}/publish`, { method: "POST" });
+      setSelectedId(activeId);
+      await refreshTests(activeId);
+      setInfo("Вариант сохранён и опубликован.");
+    } catch (errorSavePublish) {
+      setError(errorSavePublish.message || "Не удалось сохранить и опубликовать вариант");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handlePublish = async (action) => {
     if (!selectedId) {
       return;
@@ -435,6 +581,32 @@ export default function AdminPage() {
       setInfo(action === "publish" ? "Вариант опубликован." : "Вариант снят с публикации.");
     } catch (publishError) {
       setError(publishError.message || "Не удалось обновить статус варианта");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteCurrent = async () => {
+    if (!selectedId) {
+      setError("Удалять можно только уже сохранённый вариант.");
+      return;
+    }
+    const confirmed = window.confirm(
+      `Удалить вариант "${draftTest.title || selectedId}"?\nЭто действие нельзя отменить.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setInfo("");
+    try {
+      await apiRequest(`/api/admin/tests/${selectedId}`, { method: "DELETE" });
+      await refreshTests("");
+      setInfo("Вариант удалён.");
+    } catch (deleteError) {
+      setError(deleteError.message || "Не удалось удалить вариант");
     } finally {
       setSaving(false);
     }
@@ -501,8 +673,30 @@ export default function AdminPage() {
     }
   };
 
+  const handlePickAudioFile = () => {
+    audioInputRef.current?.click();
+  };
+
+  const handleAudioInputChange = (event) => {
+    const nextFile = event.target.files?.[0] || null;
+    setAudioFile(nextFile);
+  };
+
+  const handleAudioDrop = (event) => {
+    event.preventDefault();
+    const nextFile = event.dataTransfer?.files?.[0] || null;
+    if (!nextFile) {
+      return;
+    }
+    setAudioFile(nextFile);
+    if (audioInputRef.current) {
+      audioInputRef.current.files = event.dataTransfer.files;
+    }
+  };
+
   const handleUploadAudio = async () => {
     if (!audioFile || !audioTargetPath) {
+      setError("Сначала выберите аудиофайл и поле назначения.");
       return;
     }
     setSaving(true);
@@ -521,6 +715,10 @@ export default function AdminPage() {
       setDraftField(audioTargetPath, data.url);
       setLastAudioUrl(resolveMediaUrl(backendUrl, data.previewUrl || data.url));
       setInfo("Аудиофайл загружен и подставлен в выбранное поле.");
+      setAudioFile(null);
+      if (audioInputRef.current) {
+        audioInputRef.current.value = "";
+      }
     } catch (uploadError) {
       setError(uploadError.message || "Не удалось загрузить аудио");
     } finally {
@@ -712,14 +910,86 @@ export default function AdminPage() {
           </p>
         </section>
 
+        <section className="surface p-5">
+          <h2 className="text-2xl font-medium text-[var(--foreground)]">Быстрый workflow</h2>
+          <div className="mt-3 grid gap-3 md:grid-cols-4">
+            <div className="surface-soft p-3">
+              <p className="text-xs uppercase tracking-wide text-[var(--muted-foreground)]">Шаг 1</p>
+              <p className="mt-1 text-sm text-[var(--foreground)]">Создайте заготовку варианта</p>
+              <div className="mt-2 flex gap-2">
+                <button type="button" onClick={handleCreateDraft} disabled={saving} className="btn btn-outline text-xs">
+                  Пустой
+                </button>
+                <button type="button" onClick={handleGenerateAiDraft} disabled={saving} className="btn btn-outline text-xs">
+                  AI текст
+                </button>
+              </div>
+            </div>
+
+            <div className="surface-soft p-3">
+              <p className="text-xs uppercase tracking-wide text-[var(--muted-foreground)]">Шаг 2</p>
+              <p className="mt-1 text-sm text-[var(--foreground)]">Отредактируйте вручную поля и задания</p>
+              <p className="mt-2 text-xs text-[var(--muted-foreground)]">Ниже доступна полная форма и Raw JSON.</p>
+            </div>
+
+            <div className="surface-soft p-3">
+              <p className="text-xs uppercase tracking-wide text-[var(--muted-foreground)]">Шаг 3</p>
+              <p className="mt-1 text-sm text-[var(--foreground)]">Подготовьте аудио (своё или TTS)</p>
+              <div className="mt-2 text-xs text-[var(--muted-foreground)]">
+                Заполнено: {audioStats.filled}/{audioStats.total}, не хватает: {audioStats.missing}
+              </div>
+            </div>
+
+            <div className="surface-soft p-3">
+              <p className="text-xs uppercase tracking-wide text-[var(--muted-foreground)]">Шаг 4</p>
+              <p className="mt-1 text-sm text-[var(--foreground)]">Сохраните и публикуйте</p>
+              <button type="button" onClick={handleSaveAndPublish} disabled={saving} className="btn btn-primary mt-2 text-xs">
+                Сохранить и опубликовать
+              </button>
+            </div>
+          </div>
+        </section>
+
         <section className="grid gap-4 lg:grid-cols-[310px_1fr]">
           <aside className="surface p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-medium text-[var(--foreground)]">Варианты</h2>
               <span className="text-xs text-[var(--muted-foreground)]">{tests.length} шт.</span>
             </div>
+            <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-2 py-2">
+                <div className="text-lg font-semibold text-[var(--foreground)]">{testsStats.published}</div>
+                <div className="text-[11px] text-[var(--muted-foreground)]">published</div>
+              </div>
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-2 py-2">
+                <div className="text-lg font-semibold text-[var(--foreground)]">{testsStats.draft}</div>
+                <div className="text-[11px] text-[var(--muted-foreground)]">draft</div>
+              </div>
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--secondary)] px-2 py-2">
+                <div className="text-lg font-semibold text-[var(--foreground)]">{testsStats.ai}</div>
+                <div className="text-[11px] text-[var(--muted-foreground)]">AI source</div>
+              </div>
+            </div>
+
+            <div className="mt-3 space-y-2">
+              <input
+                value={testSearch}
+                onChange={(event) => setTestSearch(event.target.value)}
+                className="field"
+                placeholder="Поиск по названию / ID"
+              />
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value)}
+                className="field"
+              >
+                <option value="all">Все статусы</option>
+                <option value="draft">Только draft</option>
+                <option value="published">Только published</option>
+              </select>
+            </div>
             <div className="mt-4 max-h-[420px] space-y-2 overflow-auto pr-1">
-              {tests.map((item) => (
+              {filteredTests.map((item) => (
                 <button
                   key={item.id}
                   type="button"
@@ -736,6 +1006,11 @@ export default function AdminPage() {
                   </div>
                 </button>
               ))}
+              {!filteredTests.length && (
+                <p className="rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-3 text-sm text-[var(--muted-foreground)]">
+                  По текущему фильтру вариантов не найдено.
+                </p>
+              )}
             </div>
 
             <div className="mt-4 space-y-2">
@@ -772,10 +1047,27 @@ export default function AdminPage() {
                   <p className="mt-1 text-sm text-[var(--muted-foreground)]">
                     ID: {selectedId || "новый черновик"}{draftTest.updatedAt ? ` | Обновлён: ${draftTest.updatedAt}` : ""}
                   </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <span className={`badge ${draftTest.status === "published" ? "badge-pro" : "badge-free"}`}>
+                      {draftTest.status}
+                    </span>
+                    <span className={`badge ${hasUnsavedChanges ? "status-warning" : "status-success"}`}>
+                      {hasUnsavedChanges ? "Есть несохранённые изменения" : "Все изменения сохранены"}
+                    </span>
+                    <span className="badge badge-free">
+                      Аудио: {audioStats.filled}/{audioStats.total}
+                    </span>
+                  </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={handleSave} disabled={saving} className="btn btn-primary">
                     Сохранить вариант
+                  </button>
+                  <button type="button" onClick={handleSaveAndPublish} disabled={saving} className="btn btn-outline">
+                    Сохранить и опубликовать
+                  </button>
+                  <button type="button" onClick={handleDuplicateCurrent} disabled={saving} className="btn btn-outline">
+                    Дублировать в новый draft
                   </button>
                   {selectedId && (
                     <>
@@ -794,6 +1086,14 @@ export default function AdminPage() {
                         className="btn btn-outline"
                       >
                         Снять с публикации
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeleteCurrent}
+                        disabled={saving}
+                        className="btn btn-danger"
+                      >
+                        Удалить вариант
                       </button>
                     </>
                   )}
@@ -1192,11 +1492,28 @@ export default function AdminPage() {
                 <div className="surface-soft p-4">
                   <p className="text-sm font-semibold text-[var(--foreground)]">Загрузка файла</p>
                   <input
+                    ref={audioInputRef}
                     type="file"
-                    accept="audio/*"
-                    onChange={(event) => setAudioFile(event.target.files?.[0] || null)}
-                    className="mt-3 block w-full text-sm text-[var(--foreground)]"
+                    accept="audio/mp3,audio/mpeg,audio/wav,audio/x-wav,audio/ogg,audio/webm,audio/mp4,audio/x-m4a,.mp3,.wav,.ogg,.webm,.m4a"
+                    capture="user"
+                    onChange={handleAudioInputChange}
+                    className="hidden"
                   />
+                  <div
+                    className="mt-3 rounded-xl border border-dashed border-[var(--border-strong)] bg-[var(--secondary)] p-3"
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={handleAudioDrop}
+                  >
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      Перетащите файл сюда или выберите с устройства.
+                    </p>
+                    <button type="button" onClick={handlePickAudioFile} className="btn btn-outline mt-2 text-sm">
+                      Выбрать файл с устройства
+                    </button>
+                    <p className="mt-2 text-sm text-[var(--foreground)]">
+                      {audioFile ? `${audioFile.name} (${formatBytes(audioFile.size)})` : "Файл не выбран"}
+                    </p>
+                  </div>
                   <button
                     type="button"
                     onClick={handleUploadAudio}
@@ -1309,7 +1626,7 @@ export default function AdminPage() {
                 {users.map((item) => (
                   <tr key={item.id} className="border-t border-[var(--border)]">
                     <td className="px-2 py-2">{item.email}</td>
-                    <td className="px-2 py-2">{item.displayName || "вЂ”"}</td>
+                    <td className="px-2 py-2">{item.displayName || "—"}</td>
                     <td className="px-2 py-2">{item.role}</td>
                     <td className="px-2 py-2">{item.isPro ? "PRO" : "FREE"}</td>
                     <td className="px-2 py-2">

@@ -21,10 +21,12 @@ const {
   generateSpeechWithGroq,
 } = require("./ai");
 const { validateAudioUpload } = require("./mediaValidation");
+const { createClient: createYooKassaClient } = require("./yookassa");
 
 const db = initDatabase();
 const repositories = createRepositories(db);
 const auth = createAuth({ repositories, config });
+const yooKassa = createYooKassaClient(config);
 
 const authRateLimit = createRateLimiter({
   keyPrefix: "auth",
@@ -91,6 +93,137 @@ function normalizeDisplayName(value, { fallback = "" } = {}) {
   return cleaned || fallback;
 }
 
+function buildBillingReturnUrl(baseUrl, paymentId) {
+  const cleanBase = trimText(baseUrl);
+  if (!cleanBase) {
+    return "";
+  }
+  const separator = cleanBase.includes("?") ? "&" : "?";
+  return `${cleanBase}${separator}paymentProvider=yookassa&paymentId=${encodeURIComponent(paymentId)}`;
+}
+
+function resolveBillingReturnBaseUrl() {
+  if (trimText(config.BILLING_RETURN_URL)) {
+    return trimText(config.BILLING_RETURN_URL);
+  }
+
+  const primaryOrigin = config.ALLOWED_ORIGINS[0];
+  if (!primaryOrigin) {
+    return "";
+  }
+  return `${primaryOrigin.replace(/\/+$/, "")}/profile`;
+}
+
+function normalizePaymentStatus(rawStatus) {
+  const status = trimText(rawStatus).toLowerCase();
+  if (status === "succeeded") {
+    return "succeeded";
+  }
+  if (status === "canceled") {
+    return "canceled";
+  }
+  if (status === "waiting_for_capture") {
+    return "waiting_for_capture";
+  }
+  return "pending";
+}
+
+function mapBillingErrorStatus(errorMessage) {
+  const normalized = String(errorMessage || "").toLowerCase();
+  if (normalized.includes("not configured")) {
+    return 503;
+  }
+  if (normalized.includes("error 401") || normalized.includes("error 403")) {
+    return 502;
+  }
+  if (normalized.includes("error 429")) {
+    return 429;
+  }
+  return 502;
+}
+
+function mapYooKassaPaymentToSnapshot(payment, fallback = {}) {
+  return {
+    id: trimText(payment?.id) || fallback.id || "",
+    status: normalizePaymentStatus(payment?.status || fallback.status),
+    paid: Boolean(payment?.paid),
+    amount: {
+      value: trimText(payment?.amount?.value || fallback.amount?.value || ""),
+      currency: trimText(payment?.amount?.currency || fallback.amount?.currency || "RUB") || "RUB",
+    },
+    confirmationUrl: trimText(
+      payment?.confirmation?.confirmation_url || fallback.confirmationUrl || ""
+    ),
+    metadata: payment?.metadata && typeof payment.metadata === "object" ? payment.metadata : fallback.metadata || {},
+    raw: payment && typeof payment === "object" ? payment : fallback.raw || {},
+  };
+}
+
+function finalizeProIfNeeded({ userId, payment, updatedAt }) {
+  if (!payment || payment.status !== "succeeded" || !payment.paid) {
+    return false;
+  }
+  const user = repositories.findUserById(userId);
+  if (!user) {
+    return false;
+  }
+  if (user.isPro) {
+    return true;
+  }
+  repositories.updateUserPro(userId, true, updatedAt);
+  return true;
+}
+
+function persistYooKassaPayment({
+  providerPayment,
+  fallbackUserId = "",
+  returnUrl = "",
+  planCode = config.BILLING_PRO_PLAN_CODE,
+  idempotenceKey = "",
+  updatedAt = nowIso(),
+}) {
+  const snapshot = mapYooKassaPaymentToSnapshot(providerPayment);
+  const metadataUserId = trimText(snapshot.metadata?.user_id);
+  const userId = metadataUserId || trimText(fallbackUserId);
+  if (!snapshot.id || !userId) {
+    return null;
+  }
+
+  const existing = repositories.findBillingPaymentById(snapshot.id);
+  const completedAt = snapshot.status === "succeeded" && snapshot.paid ? updatedAt : null;
+  if (!existing) {
+    repositories.createBillingPayment({
+      id: snapshot.id,
+      userId,
+      provider: "yookassa",
+      planCode: trimText(snapshot.metadata?.plan_code) || trimText(planCode) || "pro-monthly",
+      amount: snapshot.amount,
+      status: snapshot.status,
+      paid: snapshot.paid,
+      confirmationUrl: snapshot.confirmationUrl,
+      returnUrl: returnUrl || "",
+      idempotenceKey: idempotenceKey || "",
+      metadata: snapshot.metadata,
+      raw: snapshot.raw,
+      createdAt: updatedAt,
+      updatedAt,
+      completedAt,
+    });
+    return repositories.findBillingPaymentById(snapshot.id);
+  }
+
+  return repositories.updateBillingPaymentState({
+    paymentId: snapshot.id,
+    status: snapshot.status,
+    paid: snapshot.paid,
+    confirmationUrl: snapshot.confirmationUrl,
+    raw: snapshot.raw,
+    metadata: snapshot.metadata,
+    updatedAt,
+    completedAt,
+  });
+}
+
 function makeTtsFileName({ base, extension }) {
   const safeBase = slugify(base) || "tts-audio";
   return `${Date.now()}-${safeBase}${extension || ".mp3"}`;
@@ -115,8 +248,18 @@ function isRateLimitError(errorMessage) {
   );
 }
 
-function mapTtsErrorStatus(errorMessage) {
+function mapProviderErrorStatus(errorMessage) {
   const normalized = String(errorMessage || "").toLowerCase();
+  if (
+    normalized.includes("401") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("invalid api key")
+  ) {
+    return 401;
+  }
+  if (normalized.includes("403") || normalized.includes("forbidden")) {
+    return 403;
+  }
   if (isRateLimitError(normalized)) {
     return 429;
   }
@@ -250,6 +393,44 @@ function mapMediaUrlForClient(rawUrl) {
     return signUploadMediaPath(source);
   }
   return source;
+}
+
+function collectUploadMediaPaths(test) {
+  const result = new Set();
+  const push = (value) => {
+    const normalized = String(value || "").split("?")[0].trim();
+    if (!normalized.startsWith("/media/uploads/")) {
+      return;
+    }
+    result.add(normalized);
+  };
+
+  if (!test || typeof test !== "object") {
+    return result;
+  }
+
+  push(test?.tasks?.task1?.referenceAudioUrl);
+  push(test?.tasks?.task2?.introAudioUrl);
+  push(test?.tasks?.task2?.outroAudioUrl);
+  const questions = Array.isArray(test?.tasks?.task2?.questions) ? test.tasks.task2.questions : [];
+  for (const question of questions) {
+    push(question?.audioUrl);
+    push(question?.referenceAudioUrl);
+  }
+  push(test?.tasks?.task3?.referenceAudioUrl);
+  return result;
+}
+
+function uploadMediaPathToAbsolute(mediaPath) {
+  const fileName = path.basename(String(mediaPath || ""));
+  if (!fileName) {
+    return "";
+  }
+  const resolved = path.join(config.UPLOADS_DIR, fileName);
+  if (!resolved.startsWith(config.UPLOADS_DIR)) {
+    return "";
+  }
+  return resolved;
 }
 
 async function safeUnlink(filePath) {
@@ -434,7 +615,7 @@ async function generateAudioAssetsForTest({ test, overwrite = false, voice }) {
   for (const target of targets) {
     try {
       const generated = await generateSpeechWithGroq({
-        apiKey: config.GROQ_API_KEY,
+        apiKey: config.GROQ_TTS_API_KEY || config.GROQ_API_KEY,
         model: config.TTS_MODEL,
         voice,
         text: target.text,
@@ -746,14 +927,165 @@ function createApp() {
     return res.json({ user: auth.getPublicUser(refreshedUser) });
   });
 
-  app.post("/api/billing/mock-pay", auth.requireAuth, (req, res) => {
-    const updated = repositories.updateUserPro(req.user.id, true, nowIso());
-    if (!updated) {
-      return res.status(404).json({ error: "User not found" });
+  app.post("/api/billing/yookassa/create-payment", auth.requireAuth, async (req, res) => {
+    if (!yooKassa.isConfigured()) {
+      return res.status(503).json({
+        error: "YooKassa is not configured. Set YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY.",
+      });
     }
 
+    const user = repositories.findUserById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    if (user.isPro || user.role === "admin") {
+      return res.status(409).json({ error: "Pro subscription is already active" });
+    }
+
+    const returnBaseUrl = resolveBillingReturnBaseUrl();
+    if (!returnBaseUrl) {
+      return res.status(500).json({
+        error: "Billing return URL is not configured. Set BILLING_RETURN_URL or FRONTEND_ORIGIN.",
+      });
+    }
+
+    try {
+      const createdAt = nowIso();
+      const { payment, idempotenceKey } = await yooKassa.createPayment({
+        amountValue: config.BILLING_PRO_MONTHLY_PRICE_RUB,
+        currency: "RUB",
+        description: `${config.BILLING_PRO_PLAN_TITLE} (${user.email})`,
+        returnUrl: returnBaseUrl,
+        metadata: {
+          user_id: user.id,
+          plan_code: config.BILLING_PRO_PLAN_CODE,
+        },
+      });
+
+      const persisted = persistYooKassaPayment({
+        providerPayment: payment,
+        fallbackUserId: user.id,
+        returnUrl: returnBaseUrl,
+        idempotenceKey,
+        updatedAt: createdAt,
+      });
+      if (!persisted) {
+        return res.status(502).json({ error: "Failed to persist payment state" });
+      }
+
+      return res.status(201).json({
+        ok: true,
+        payment: {
+          id: persisted.id,
+          status: persisted.status,
+          confirmationUrl: persisted.confirmationUrl,
+          amount: persisted.amount,
+          returnUrl: buildBillingReturnUrl(returnBaseUrl, persisted.id),
+        },
+      });
+    } catch (error) {
+      return res.status(mapBillingErrorStatus(error.message || "")).json({
+        error: error.message || "Failed to create YooKassa payment",
+      });
+    }
+  });
+
+  app.get("/api/billing/yookassa/payment/:paymentId/status", auth.requireAuth, async (req, res) => {
+    const paymentId = trimText(req.params.paymentId);
+    if (!paymentId) {
+      return res.status(400).json({ error: "paymentId is required" });
+    }
+
+    const existing = repositories.findBillingPaymentById(paymentId);
+    if (existing && existing.userId !== req.user.id && req.user.role !== "admin") {
+      return res.status(403).json({ error: "Access denied for this payment" });
+    }
+
+    let providerPayment = null;
+    if (yooKassa.isConfigured()) {
+      try {
+        providerPayment = await yooKassa.getPayment(paymentId);
+      } catch (error) {
+        if (!existing) {
+          return res.status(mapBillingErrorStatus(error.message || "")).json({
+            error: error.message || "Failed to fetch payment status",
+          });
+        }
+      }
+    }
+
+    const updatedAt = nowIso();
+    const nextPayment = providerPayment
+      ? persistYooKassaPayment({
+          providerPayment,
+          fallbackUserId: existing?.userId || req.user.id,
+          returnUrl: existing?.returnUrl || resolveBillingReturnBaseUrl(),
+          planCode: existing?.planCode || config.BILLING_PRO_PLAN_CODE,
+          idempotenceKey: existing?.idempotenceKey || "",
+          updatedAt,
+        })
+      : existing;
+
+    if (!nextPayment) {
+      return res.status(404).json({ error: "Payment not found" });
+    }
+    if (nextPayment.userId !== req.user.id && req.user.role !== "admin") {
+      return res.status(403).json({ error: "Access denied for this payment" });
+    }
+
+    finalizeProIfNeeded({
+      userId: nextPayment.userId,
+      payment: nextPayment,
+      updatedAt,
+    });
+
     const refreshedUser = repositories.findUserById(req.user.id);
-    return res.json({ ok: true, user: auth.getPublicUser(refreshedUser) });
+    return res.json({
+      ok: true,
+      payment: {
+        id: nextPayment.id,
+        status: nextPayment.status,
+        paid: nextPayment.paid,
+        amount: nextPayment.amount,
+        confirmationUrl: nextPayment.confirmationUrl,
+      },
+      user: refreshedUser ? auth.getPublicUser(refreshedUser) : auth.getPublicUser(req.user),
+    });
+  });
+
+  app.post("/api/billing/yookassa/webhook", async (req, res) => {
+    if (!yooKassa.isConfigured()) {
+      return res.status(503).json({ error: "YooKassa is not configured" });
+    }
+
+    const notification = req.body || {};
+    const paymentId = trimText(notification?.object?.id);
+    if (!paymentId) {
+      return res.status(400).json({ error: "Invalid webhook payload" });
+    }
+
+    try {
+      const providerPayment = await yooKassa.getPayment(paymentId);
+      const updatedAt = nowIso();
+      const persisted = persistYooKassaPayment({
+        providerPayment,
+        updatedAt,
+      });
+
+      if (persisted) {
+        finalizeProIfNeeded({
+          userId: persisted.userId,
+          payment: persisted,
+          updatedAt,
+        });
+      }
+
+      return res.json({ ok: true });
+    } catch (error) {
+      return res.status(mapBillingErrorStatus(error.message || "")).json({
+        error: error.message || "Failed to process YooKassa webhook",
+      });
+    }
   });
 
   app.get("/api/tests", auth.optionalAuth, (req, res) => {
@@ -1055,6 +1387,40 @@ function createApp() {
     return res.json({ test: updated });
   });
 
+  app.delete("/api/admin/tests/:id", auth.requireAdmin, adminMutationRateLimit, async (req, res) => {
+    const existing = repositories.getTestById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: "Test not found" });
+    }
+    const candidateMediaPaths = Array.from(collectUploadMediaPaths(existing));
+
+    const deleted = repositories.deleteTestById(existing.id);
+    if (!deleted) {
+      return res.status(500).json({ error: "Failed to delete test" });
+    }
+
+    const usedPaths = new Set();
+    const remainingTests = repositories.listTests();
+    for (const item of remainingTests) {
+      for (const mediaPath of collectUploadMediaPaths(item)) {
+        usedPaths.add(mediaPath);
+      }
+    }
+
+    for (const mediaPath of candidateMediaPaths) {
+      if (usedPaths.has(mediaPath)) {
+        continue;
+      }
+      const absolutePath = uploadMediaPathToAbsolute(mediaPath);
+      if (!absolutePath) {
+        continue;
+      }
+      await safeUnlink(absolutePath);
+    }
+
+    return res.json({ ok: true, id: existing.id });
+  });
+
   app.post("/api/admin/tests/generate-ai", auth.requireAdmin, adminGenerateRateLimit, async (req, res) => {
     try {
       const tests = repositories.listTests();
@@ -1077,7 +1443,8 @@ function createApp() {
       repositories.createTest(normalized);
       return res.status(201).json({ test: normalized });
     } catch (error) {
-      return res.status(500).json({ error: error.message || "Failed to generate test" });
+      const statusCode = mapProviderErrorStatus(error.message || "");
+      return res.status(statusCode).json({ error: error.message || "Failed to generate test" });
     }
   });
 
@@ -1132,7 +1499,7 @@ function createApp() {
         test: testToStore,
       });
     } catch (error) {
-      const statusCode = mapTtsErrorStatus(error.message || "");
+      const statusCode = mapProviderErrorStatus(error.message || "");
       return res.status(statusCode).json({
         error: error.message || "Failed to generate full test",
       });
@@ -1153,7 +1520,7 @@ function createApp() {
 
     try {
       const generated = await generateSpeechWithGroq({
-        apiKey: config.GROQ_API_KEY,
+        apiKey: config.GROQ_TTS_API_KEY || config.GROQ_API_KEY,
         model: config.TTS_MODEL,
         voice,
         text,
@@ -1175,7 +1542,7 @@ function createApp() {
         mimeType: generated.mimeType,
       });
     } catch (error) {
-      const statusCode = mapTtsErrorStatus(error.message || "");
+      const statusCode = mapProviderErrorStatus(error.message || "");
       return res.status(statusCode).json({
         error: error.message || "Audio generation failed",
       });
@@ -1240,7 +1607,7 @@ function createApp() {
           test: updatedTest,
         });
       } catch (error) {
-        const statusCode = mapTtsErrorStatus(error.message || "");
+        const statusCode = mapProviderErrorStatus(error.message || "");
         return res.status(statusCode).json({
           error: error.message || "Bulk audio generation failed",
         });
@@ -1330,5 +1697,3 @@ function createApp() {
 module.exports = {
   createApp,
 };
-
-

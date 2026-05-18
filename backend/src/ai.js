@@ -3,16 +3,6 @@ const fs = require("fs");
 const FormData = require("form-data");
 const { toNumberInRange } = require("./utils");
 
-const GENERATED_TOPICS = [
-  "travelling",
-  "healthy lifestyle",
-  "school clubs",
-  "volunteering",
-  "sports and wellbeing",
-  "music in teenagers' life",
-  "social media habits",
-];
-
 function extractJsonFromModelResponse(rawText) {
   if (typeof rawText !== "string") {
     return null;
@@ -49,6 +39,93 @@ function extractJsonFromModelResponse(rawText) {
   }
 
   return null;
+}
+
+function extractTextFromResponsesApi(payload) {
+  const direct = String(payload?.output_text || "").trim();
+  if (direct) {
+    return direct;
+  }
+
+  const outputItems = Array.isArray(payload?.output) ? payload.output : [];
+  for (const item of outputItems) {
+    const contentItems = Array.isArray(item?.content) ? item.content : [];
+    for (const content of contentItems) {
+      const maybeText = String(content?.text || "").trim();
+      if (maybeText) {
+        return maybeText;
+      }
+    }
+  }
+  return "";
+}
+
+function parseGroqHttpError(error, { scope = "Groq request" } = {}) {
+  const statusCode = error?.response?.status;
+  const fallbackMessage = String(error?.message || `${scope} failed.`);
+  const data = error?.response?.data;
+
+  let providerMessage = "";
+  if (typeof data === "string") {
+    providerMessage = data.trim();
+  } else if (Buffer.isBuffer(data)) {
+    providerMessage = data.toString("utf8").trim();
+  } else if (data && typeof data === "object") {
+    providerMessage = String(data?.error?.message || data?.message || "").trim();
+  }
+
+  if (statusCode === 401) {
+    return `${scope} failed: Groq returned 401 Unauthorized. Проверьте GROQ_API_KEY (ключ недействителен или отозван).`;
+  }
+
+  if (statusCode) {
+    return `${scope} failed: Groq returned ${statusCode}${providerMessage ? ` - ${providerMessage}` : ""}`;
+  }
+
+  return fallbackMessage;
+}
+
+function toShortErrorMessage(error, fallback) {
+  const providerMessage =
+    error?.response?.data?.error?.message ||
+    error?.response?.data?.message ||
+    error?.message ||
+    fallback;
+  return String(providerMessage || fallback || "Request failed.");
+}
+
+async function requestGroqText({ apiKey, model, input, temperature = 0.2, scope = "Groq text request" }) {
+  const token = String(apiKey || "").trim();
+  if (!token) {
+    throw new Error(`${scope} failed: GROQ_API_KEY is missing.`);
+  }
+
+  let response;
+  try {
+    response = await axios.post(
+      "https://api.groq.com/openai/v1/responses",
+      {
+        model,
+        input,
+        temperature,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 60000,
+      }
+    );
+  } catch (error) {
+    throw new Error(parseGroqHttpError(error, { scope }));
+  }
+
+  const text = extractTextFromResponsesApi(response.data);
+  if (!text) {
+    throw new Error(`${scope} failed: empty response text.`);
+  }
+  return text;
 }
 
 function normalizeAnalyzeResult(value) {
@@ -112,23 +189,13 @@ Return strict JSON only in this exact format:
   "improved_answer": "one improved student answer"
 }`;
 
-  const response = await axios.post(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      model,
-      temperature: 0.2,
-      messages: [{ role: "user", content: prompt }],
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      timeout: 60000,
-    }
-  );
-
-  const modelContent = response.data?.choices?.[0]?.message?.content || "";
+  const modelContent = await requestGroqText({
+    apiKey,
+    model,
+    input: prompt,
+    temperature: 0.2,
+    scope: "AI evaluation",
+  });
   const parsed = extractJsonFromModelResponse(modelContent);
   if (!parsed) {
     throw new Error("AI model returned invalid JSON.");
@@ -163,17 +230,22 @@ async function transcribeWithGroq({ apiKey, file }) {
     });
   }
 
-  const response = await axios.post(
-    "https://api.groq.com/openai/v1/audio/transcriptions",
-    formData,
-    {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        ...formData.getHeaders(),
-      },
-      timeout: 60000,
-    }
-  );
+  let response;
+  try {
+    response = await axios.post(
+      "https://api.groq.com/openai/v1/audio/transcriptions",
+      formData,
+      {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          ...formData.getHeaders(),
+        },
+        timeout: 60000,
+      }
+    );
+  } catch (error) {
+    throw new Error(parseGroqHttpError(error, { scope: "Transcription" }));
+  }
 
   const text = String(response.data?.text || "").trim();
   if (!text) {
@@ -185,64 +257,7 @@ async function transcribeWithGroq({ apiKey, file }) {
 
 async function generateTestWithAi({ apiKey, model, seedTest }) {
   if (!apiKey) {
-    const topic = GENERATED_TOPICS[Math.floor(Math.random() * GENERATED_TOPICS.length)];
-    return {
-      title: `AI Generated Variant - ${topic}`,
-      description: "Auto-generated fallback variant (without AI provider).",
-      access: "pro",
-      status: "draft",
-      source: "ai",
-      tasks: {
-        task1: {
-          title: "Read Aloud",
-          prepSeconds: 90,
-          maxRecordSeconds: 120,
-          readingText:
-            "People travel much more today than in the past. Modern transport allows us to visit far-away places quickly. Travelling helps people learn about cultures and traditions. It also teaches responsibility and independence.",
-          referenceText:
-            "People travel much more today than in the past. Modern transport allows us to visit far-away places quickly. Travelling helps people learn about cultures and traditions. It also teaches responsibility and independence.",
-          referenceAudioUrl: "",
-        },
-        task2: {
-          title: "Telephone Survey",
-          maxAnswerSeconds: 40,
-          introAudioUrl: "",
-          outroAudioUrl: "",
-          questions: [
-            "How old are you?",
-            "How often do you travel each year?",
-            "What is your favorite way of travelling?",
-            "What places are popular with teenagers in your region?",
-            "Why is travelling useful for young people?",
-            "What advice would you give to someone planning their first trip?",
-          ].map((text, index) => ({
-            id: `q${index + 1}`,
-            text,
-            audioUrl: "",
-            referenceText:
-              index === 0
-                ? "I am 15 years old."
-                : "I think travelling helps teenagers become more open-minded and confident.",
-            referenceAudioUrl: "",
-          })),
-        },
-        task3: {
-          title: "Monologue",
-          topic: "Travelling",
-          prepSeconds: 90,
-          maxRecordSeconds: 120,
-          plan: [
-            "why people travel so much nowadays",
-            "what people usually do while travelling abroad",
-            "what country you would like to visit and why",
-            "your attitude to travelling",
-          ],
-          referenceText:
-            "Nowadays, many people travel to discover new places and cultures. While travelling abroad, they usually visit museums, try local food, and take photos. I would like to visit Japan because I am interested in its traditions and technology. In my opinion, travelling is one of the best ways to learn and grow.",
-          referenceAudioUrl: "",
-        },
-      },
-    };
+    throw new Error("AI generation is disabled: GROQ_API_KEY is missing.");
   }
 
   const seedSummary = {
@@ -298,23 +313,13 @@ Return strict JSON only:
   }
 }`;
 
-  const response = await axios.post(
-    "https://api.groq.com/openai/v1/chat/completions",
-    {
-      model,
-      temperature: 0.8,
-      messages: [{ role: "user", content: prompt }],
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      timeout: 60000,
-    }
-  );
-
-  const modelContent = response.data?.choices?.[0]?.message?.content || "";
+  const modelContent = await requestGroqText({
+    apiKey,
+    model,
+    input: prompt,
+    temperature: 0.8,
+    scope: "AI variant generation",
+  });
   const parsed = extractJsonFromModelResponse(modelContent);
   if (!parsed) {
     throw new Error("AI test generator returned invalid JSON");
@@ -605,6 +610,10 @@ function parseProviderError(error) {
     return `Groq TTS model terms must be accepted in Groq Console before using this model. ${providerMessage}`;
   }
 
+  if (statusCode === 401) {
+    return "Groq TTS error 401: Invalid API Key. Укажите рабочий GROQ_TTS_API_KEY (или GROQ_API_KEY для TTS).";
+  }
+
   if (statusCode) {
     return `Groq TTS error ${statusCode}: ${providerMessage}`;
   }
@@ -649,7 +658,7 @@ async function requestGroqSpeechChunk({
 
 async function generateSpeechWithGroq({ apiKey, model, voice, text, responseFormat }) {
   if (!apiKey) {
-    throw new Error("TTS generation is disabled: GROQ_API_KEY is missing.");
+    throw new Error("TTS generation is disabled: GROQ_TTS_API_KEY (or GROQ_API_KEY) is missing.");
   }
 
   const sourceText = String(text || "").trim();
@@ -704,6 +713,150 @@ async function generateSpeechWithGroq({ apiKey, model, voice, text, responseForm
   };
 }
 
+async function checkGroqAccess({ apiKey, ttsApiKey, generateModel, ttsModel, ttsVoice }) {
+  const textToken = String(apiKey || "").trim();
+  const speechToken = String(ttsApiKey || apiKey || "").trim();
+  const report = {
+    ok: false,
+    keyPresent: Boolean(textToken),
+    ttsKeyPresent: Boolean(speechToken),
+    checkedAt: new Date().toISOString(),
+    config: {
+      generateModel: String(generateModel || ""),
+      ttsModel: String(ttsModel || ""),
+      ttsVoice: String(ttsVoice || ""),
+    },
+    models: {
+      ok: false,
+      status: 0,
+      count: 0,
+      hasGenerateModel: false,
+      hasTtsModel: false,
+      error: "",
+    },
+    chat: {
+      ok: false,
+      status: 0,
+      error: "",
+    },
+    tts: {
+      ok: false,
+      status: 0,
+      error: "",
+      bytes: 0,
+    },
+  };
+
+  if (!textToken) {
+    report.models.error = "GROQ_API_KEY is missing.";
+    report.chat.error = "GROQ_API_KEY is missing.";
+  }
+  if (!speechToken) {
+    report.tts.error = "GROQ_TTS_API_KEY (or GROQ_API_KEY) is missing.";
+  }
+  if (!textToken && !speechToken) {
+    return report;
+  }
+
+  const textHeaders = {
+    Authorization: `Bearer ${textToken}`,
+    "Content-Type": "application/json",
+  };
+  const speechHeaders = {
+    Authorization: `Bearer ${speechToken}`,
+    "Content-Type": "application/json",
+  };
+
+  if (textToken) {
+    let modelIds = [];
+    try {
+      const response = await axios.get("https://api.groq.com/openai/v1/models", {
+        headers: textHeaders,
+        timeout: 20000,
+      });
+      modelIds = Array.isArray(response.data?.data)
+        ? response.data.data.map((item) => String(item?.id || "")).filter(Boolean)
+        : [];
+      report.models.ok = true;
+      report.models.status = response.status || 200;
+      report.models.count = modelIds.length;
+      report.models.hasGenerateModel = modelIds.includes(String(generateModel || ""));
+      report.models.hasTtsModel = modelIds.includes(String(ttsModel || ""));
+    } catch (error) {
+      report.models.ok = false;
+      report.models.status = Number(error?.response?.status || 0);
+      report.models.error = toShortErrorMessage(error, "Failed to list models.");
+    }
+  }
+
+  if (textToken) {
+    try {
+      const response = await axios.post(
+        "https://api.groq.com/openai/v1/responses",
+        {
+          model: String(generateModel || "llama-3.3-70b-versatile"),
+          input: "Reply with OK",
+          max_output_tokens: 16,
+          temperature: 0,
+        },
+        {
+          headers: textHeaders,
+          timeout: 30000,
+        }
+      );
+      const text = extractTextFromResponsesApi(response.data);
+      report.chat.ok = Boolean(text);
+      report.chat.status = response.status || 200;
+      if (!report.chat.ok) {
+        report.chat.error = "Responses API returned empty text.";
+      }
+    } catch (error) {
+      report.chat.ok = false;
+      report.chat.status = Number(error?.response?.status || 0);
+      report.chat.error = toShortErrorMessage(error, "Chat completion check failed.");
+    }
+  }
+
+  if (speechToken) {
+    try {
+      const response = await axios.post(
+        "https://api.groq.com/openai/v1/audio/speech",
+        {
+          model: String(ttsModel || ORPHEUS_MODEL_ENGLISH),
+          voice: String(ttsVoice || ORPHEUS_DEFAULT_VOICE),
+          input: "Health check.",
+          response_format: "wav",
+        },
+        {
+          headers: speechHeaders,
+          responseType: "arraybuffer",
+          timeout: 30000,
+        }
+      );
+      const bytes = Buffer.from(response.data || []).length;
+      report.tts.ok = bytes > 0;
+      report.tts.status = response.status || 200;
+      report.tts.bytes = bytes;
+      if (!report.tts.ok) {
+        report.tts.error = "TTS returned empty audio.";
+      }
+    } catch (error) {
+      report.tts.ok = false;
+      report.tts.status = Number(error?.response?.status || 0);
+      report.tts.error = toShortErrorMessage(error, "TTS check failed.");
+    }
+  }
+
+  report.ok = Boolean(
+    report.models.ok &&
+      report.models.hasGenerateModel &&
+      report.models.hasTtsModel &&
+      report.chat.ok &&
+      report.tts.ok
+  );
+  return report;
+}
+
 // Backward-compatible alias used by older imports.
 const generateSpeechWithOpenAi = generateSpeechWithGroq;
 
@@ -712,6 +865,7 @@ module.exports = {
   transcribeWithGroq,
   generateTestWithAi,
   generateSpeechWithGroq,
+  checkGroqAccess,
   generateSpeechWithOpenAi,
 };
 

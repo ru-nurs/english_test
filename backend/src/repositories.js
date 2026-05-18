@@ -14,6 +14,41 @@ function serializeTest(test) {
   return JSON.stringify(test);
 }
 
+function parseJsonOrFallback(raw, fallback) {
+  try {
+    return JSON.parse(String(raw || ""));
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function mapBillingPaymentRow(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    userId: row.user_id,
+    provider: row.provider,
+    planCode: row.plan_code,
+    amount: {
+      value: row.amount_value,
+      currency: row.amount_currency,
+    },
+    status: row.status,
+    paid: Boolean(row.paid),
+    confirmationUrl: row.confirmation_url || "",
+    returnUrl: row.return_url || "",
+    idempotenceKey: row.idempotence_key || "",
+    metadata: parseJsonOrFallback(row.metadata_json, {}),
+    raw: parseJsonOrFallback(row.raw_json, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at || "",
+  };
+}
+
 function createRepositories(db) {
   function createUser(user) {
     db.prepare(
@@ -342,6 +377,11 @@ function createRepositories(db) {
     return updated;
   }
 
+  function deleteTestById(testId) {
+    const result = db.prepare(`DELETE FROM tests WHERE id = ?`).run(testId);
+    return result.changes > 0;
+  }
+
   function listAttemptsByUser(userId) {
     const rows = db
       .prepare(
@@ -384,6 +424,95 @@ function createRepositories(db) {
     );
   }
 
+  function createBillingPayment(payment) {
+    db.prepare(
+      `INSERT INTO billing_payments (
+        id, user_id, provider, plan_code, amount_value, amount_currency, status, paid,
+        confirmation_url, return_url, idempotence_key, metadata_json, raw_json,
+        created_at, updated_at, completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      payment.id,
+      payment.userId,
+      payment.provider,
+      payment.planCode,
+      payment.amount?.value || "",
+      payment.amount?.currency || "RUB",
+      payment.status,
+      payment.paid ? 1 : 0,
+      payment.confirmationUrl || "",
+      payment.returnUrl || "",
+      payment.idempotenceKey || "",
+      JSON.stringify(payment.metadata || {}),
+      JSON.stringify(payment.raw || {}),
+      payment.createdAt,
+      payment.updatedAt,
+      payment.completedAt || null
+    );
+  }
+
+  function findBillingPaymentById(paymentId) {
+    const row = db
+      .prepare(
+        `SELECT
+          id, user_id, provider, plan_code, amount_value, amount_currency, status, paid,
+          confirmation_url, return_url, idempotence_key, metadata_json, raw_json,
+          created_at, updated_at, completed_at
+         FROM billing_payments
+         WHERE id = ?
+         LIMIT 1`
+      )
+      .get(paymentId);
+    return mapBillingPaymentRow(row);
+  }
+
+  function updateBillingPaymentState({
+    paymentId,
+    status,
+    paid,
+    confirmationUrl,
+    raw,
+    metadata,
+    updatedAt,
+    completedAt,
+  }) {
+    const current = findBillingPaymentById(paymentId);
+    if (!current) {
+      return null;
+    }
+
+    const nextStatus = String(status || current.status);
+    const nextPaid = typeof paid === "boolean" ? paid : current.paid;
+    const nextConfirmationUrl =
+      confirmationUrl !== undefined ? String(confirmationUrl || "") : current.confirmationUrl || "";
+    const nextRaw = raw !== undefined ? raw : current.raw;
+    const nextMetadata = metadata !== undefined ? metadata : current.metadata;
+    const nextUpdatedAt = updatedAt || current.updatedAt;
+    const nextCompletedAt = completedAt !== undefined ? completedAt : current.completedAt || null;
+
+    const result = db
+      .prepare(
+        `UPDATE billing_payments
+         SET status = ?, paid = ?, confirmation_url = ?, raw_json = ?, metadata_json = ?, updated_at = ?, completed_at = ?
+         WHERE id = ?`
+      )
+      .run(
+        nextStatus,
+        nextPaid ? 1 : 0,
+        nextConfirmationUrl,
+        JSON.stringify(nextRaw || {}),
+        JSON.stringify(nextMetadata || {}),
+        nextUpdatedAt,
+        nextCompletedAt || null,
+        paymentId
+      );
+
+    if (result.changes <= 0) {
+      return null;
+    }
+    return findBillingPaymentById(paymentId);
+  }
+
   return {
     createUser,
     findUserByEmail,
@@ -406,8 +535,12 @@ function createRepositories(db) {
     createTest,
     updateTest,
     setTestStatus,
+    deleteTestById,
     listAttemptsByUser,
     createAttempt,
+    createBillingPayment,
+    findBillingPaymentById,
+    updateBillingPaymentState,
   };
 }
 

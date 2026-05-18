@@ -39,6 +39,14 @@ function parseOrigins(raw) {
     .filter(Boolean);
 }
 
+function toMoneyAmount(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed.toFixed(2);
+}
+
 const NODE_ENV = String(process.env.NODE_ENV || "development").trim() || "development";
 const isProduction = NODE_ENV === "production";
 
@@ -54,11 +62,12 @@ const config = {
   PORT: toPositiveInt(process.env.PORT, 5000),
   ALLOWED_ORIGINS: parseOrigins(process.env.FRONTEND_ORIGIN),
   TRUST_PROXY: toBoolean(process.env.TRUST_PROXY, false),
-  GROQ_API_KEY: process.env.GROQ_API_KEY || "",
-  ANALYZE_MODEL: process.env.GROQ_ANALYZE_MODEL || "llama-3.3-70b-versatile",
-  GENERATE_MODEL: process.env.GROQ_GENERATE_MODEL || "llama-3.3-70b-versatile",
-  TTS_MODEL: process.env.TTS_MODEL || "canopylabs/orpheus-v1-english",
-  TTS_VOICE: process.env.TTS_VOICE || "austin",
+  GROQ_API_KEY: String(process.env.GROQ_API_KEY || "").trim(),
+  GROQ_TTS_API_KEY: String(process.env.GROQ_TTS_API_KEY || "").trim(),
+  ANALYZE_MODEL: String(process.env.GROQ_ANALYZE_MODEL || "llama-3.3-70b-versatile").trim(),
+  GENERATE_MODEL: String(process.env.GROQ_GENERATE_MODEL || "llama-3.3-70b-versatile").trim(),
+  TTS_MODEL: String(process.env.TTS_MODEL || "canopylabs/orpheus-v1-english").trim(),
+  TTS_VOICE: String(process.env.TTS_VOICE || "austin").trim(),
   ACCESS_COOKIE_NAME: process.env.ACCESS_COOKIE_NAME || "speakeasy_access",
   REFRESH_COOKIE_NAME: process.env.REFRESH_COOKIE_NAME || "speakeasy_refresh",
   COOKIE_SECURE: toBoolean(process.env.COOKIE_SECURE, isProduction),
@@ -119,6 +128,18 @@ const config = {
     process.env.EVALUATION_TOKEN_TTL_MS,
     1000 * 60 * 30
   ),
+  YOOKASSA_API_URL: String(process.env.YOOKASSA_API_URL || "https://api.yookassa.ru/v3").trim(),
+  YOOKASSA_SHOP_ID: String(process.env.YOOKASSA_SHOP_ID || "").trim(),
+  YOOKASSA_SECRET_KEY: String(process.env.YOOKASSA_SECRET_KEY || "").trim(),
+  BILLING_PRO_PLAN_CODE: String(process.env.BILLING_PRO_PLAN_CODE || "pro-monthly").trim(),
+  BILLING_PRO_PLAN_TITLE: String(
+    process.env.BILLING_PRO_PLAN_TITLE || "Pro subscription"
+  ).trim(),
+  BILLING_PRO_MONTHLY_PRICE_RUB: toMoneyAmount(
+    process.env.BILLING_PRO_MONTHLY_PRICE_RUB,
+    "490.00"
+  ),
+  BILLING_RETURN_URL: String(process.env.BILLING_RETURN_URL || "").trim(),
 };
 
 module.exports = config;

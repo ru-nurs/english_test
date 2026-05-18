@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiRequest, clearAuthSession, setAuthSession } from "@/lib/api";
 
+const PRO_PAYMENT_STORAGE_KEY = "pendingProPaymentId";
+
 function StatCard({ title, value, caption }) {
   return (
     <article className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-6">
@@ -32,6 +34,8 @@ export default function ProfilePage() {
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [paying, setPaying] = useState(false);
+  const [checkingPayment, setCheckingPayment] = useState(false);
+  const [lastCheckedPaymentId, setLastCheckedPaymentId] = useState("");
   const [displayNameDraft, setDisplayNameDraft] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
 
@@ -60,23 +64,90 @@ export default function ProfilePage() {
     loadData();
   }, [loadData]);
 
-  const handleMockPay = async () => {
+  const checkPaymentStatus = useCallback(
+    async (paymentId, { silent = false } = {}) => {
+      const cleanPaymentId = String(paymentId || "").trim();
+      if (!cleanPaymentId) {
+        return;
+      }
+      if (!silent) {
+        setCheckingPayment(true);
+      }
+      try {
+        const data = await apiRequest(`/api/billing/yookassa/payment/${encodeURIComponent(cleanPaymentId)}/status`);
+        const nextUser = data.user || null;
+        const status = data?.payment?.status || "";
+        setUser(nextUser);
+        setAuthSession({ user: nextUser });
+
+        if (status === "succeeded") {
+          localStorage.removeItem(PRO_PAYMENT_STORAGE_KEY);
+          setInfo("Оплата подтверждена. Тариф PRO активирован.");
+        } else if (status === "canceled") {
+          localStorage.removeItem(PRO_PAYMENT_STORAGE_KEY);
+          setInfo("Платеж отменен. Вы можете попробовать снова.");
+        } else {
+          setInfo("Платеж создан и ожидает подтверждения. Завершите оплату в окне ЮKassa.");
+        }
+      } catch (paymentError) {
+        if (!silent) {
+          setError(paymentError.message || "Не удалось проверить статус платежа");
+        }
+      } finally {
+        if (!silent) {
+          setCheckingPayment(false);
+        }
+      }
+    },
+    []
+  );
+
+  const handleStartProPayment = async () => {
     setPaying(true);
     setError("");
     setInfo("");
     try {
-      const data = await apiRequest("/api/billing/mock-pay", {
+      const data = await apiRequest("/api/billing/yookassa/create-payment", {
         method: "POST",
       });
-      setUser(data.user || null);
-      setAuthSession({ user: data.user || null });
-      setInfo("Тариф обновлен до PRO.");
+      const payment = data?.payment || {};
+      const confirmationUrl = String(payment.confirmationUrl || "").trim();
+      const paymentId = String(payment.id || "").trim();
+
+      if (!confirmationUrl || !paymentId) {
+        throw new Error("Сервис оплаты вернул неполные данные");
+      }
+
+      localStorage.setItem(PRO_PAYMENT_STORAGE_KEY, paymentId);
+      window.location.href = confirmationUrl;
     } catch (payError) {
       setError(payError.message || "Не удалось обновить тариф");
     } finally {
       setPaying(false);
     }
   };
+
+  useEffect(() => {
+    if (loading || !user || user.isPro) {
+      return;
+    }
+
+    const query = new URLSearchParams(window.location.search || "");
+    const fromProvider = query.get("paymentProvider");
+    const paymentIdFromQuery = query.get("paymentId");
+    const storedPaymentId = localStorage.getItem(PRO_PAYMENT_STORAGE_KEY) || "";
+    const paymentId = String(paymentIdFromQuery || storedPaymentId || "").trim();
+    if (!paymentId || paymentId === lastCheckedPaymentId) {
+      return;
+    }
+    setLastCheckedPaymentId(paymentId);
+
+    if (fromProvider === "yookassa") {
+      checkPaymentStatus(paymentId, { silent: false });
+      return;
+    }
+    checkPaymentStatus(paymentId, { silent: true });
+  }, [loading, user, checkPaymentStatus, lastCheckedPaymentId]);
 
   const handleSaveProfile = async () => {
     const trimmed = displayNameDraft.trim();
@@ -191,11 +262,11 @@ export default function ProfilePage() {
           <section className="mb-10">
             <button
               type="button"
-              onClick={handleMockPay}
-              disabled={paying}
+              onClick={handleStartProPayment}
+              disabled={paying || checkingPayment}
               className="rounded-xl bg-[var(--primary)] px-8 py-3 text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
             >
-              {paying ? "Обрабатываем..." : "Перейти на PRO (демо)"}
+              {paying ? "Переходим к оплате..." : checkingPayment ? "Проверяем платеж..." : "Перейти на PRO"}
             </button>
           </section>
         )}

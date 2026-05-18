@@ -20,7 +20,7 @@ function hasInvalidRouterStateHeader(request) {
   }
 }
 
-export function middleware(request) {
+export function proxy(request) {
   if (!hasInvalidRouterStateHeader(request)) {
     return NextResponse.next();
   }
