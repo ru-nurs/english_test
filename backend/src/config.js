@@ -49,6 +49,10 @@ function toMoneyAmount(value, fallback) {
 
 const NODE_ENV = String(process.env.NODE_ENV || "development").trim() || "development";
 const isProduction = NODE_ENV === "production";
+const requestedCookieSameSite = String(process.env.COOKIE_SAME_SITE || "lax")
+  .trim()
+  .toLowerCase();
+const effectiveCookieSameSite = isProduction ? "none" : requestedCookieSameSite;
 
 const config = {
   ROOT_DIR,
@@ -70,8 +74,8 @@ const config = {
   TTS_VOICE: String(process.env.TTS_VOICE || "austin").trim(),
   ACCESS_COOKIE_NAME: process.env.ACCESS_COOKIE_NAME || "speakeasy_access",
   REFRESH_COOKIE_NAME: process.env.REFRESH_COOKIE_NAME || "speakeasy_refresh",
-  COOKIE_SECURE: toBoolean(process.env.COOKIE_SECURE, isProduction),
-  COOKIE_SAME_SITE: process.env.COOKIE_SAME_SITE || "lax",
+  COOKIE_SECURE: isProduction ? true : toBoolean(process.env.COOKIE_SECURE, false),
+  COOKIE_SAME_SITE: effectiveCookieSameSite,
   ADMIN_BOOTSTRAP_KEY: process.env.ADMIN_BOOTSTRAP_KEY || "",
   ADMIN_BOOTSTRAP_ENABLED: toBoolean(
     process.env.ADMIN_BOOTSTRAP_ENABLED,
