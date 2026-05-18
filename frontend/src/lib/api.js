@@ -1,5 +1,8 @@
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL || "https://english-test-nh5g.onrender.com";
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+
+if (!BACKEND_URL) {
+  throw new Error("NEXT_PUBLIC_BACKEND_URL is not set");
+}
 
 const AUTH_STORAGE_KEY = "authSessionUser";
 export const AUTH_SESSION_EVENT = "auth-session-updated";
