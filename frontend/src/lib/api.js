@@ -1,4 +1,5 @@
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_BACKEND_URL || "https://english-test-nh5g.onrender.com";
 
 const AUTH_STORAGE_KEY = "authSessionUser";
 export const AUTH_SESSION_EVENT = "auth-session-updated";
