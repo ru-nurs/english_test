@@ -3,7 +3,7 @@
 ## Where to deploy
 
 - Frontend: **Vercel** (best for Next.js)
-- Backend: **Render Web Service** + **Persistent Disk** (needed for SQLite and uploaded audio files)
+- Backend: **Render Web Service** + **Supabase Postgres**
 
 This combo is fast to set up and good enough to share a stable demo link with a client.
 
@@ -20,6 +20,7 @@ Environment variables:
 ```env
 NODE_ENV=production
 FRONTEND_ORIGIN=https://<your-frontend-domain>
+SUPABASE_DB_URL=<supabase pooled connection string>
 GROQ_API_KEY=<your_groq_key>
 GROQ_ANALYZE_MODEL=llama-3.3-70b-versatile
 GROQ_GENERATE_MODEL=llama-3.3-70b-versatile
@@ -43,7 +44,8 @@ BILLING_RETURN_URL=https://<your-frontend-domain>/profile
 
 Notes:
 
-- Attach a persistent disk and mount it for app data/media persistence.
+- Run `backend/supabase/schema.sql` once in Supabase SQL Editor before starting the backend.
+- Use Supabase's pooled Postgres connection string for `SUPABASE_DB_URL`.
 - `PORT` is managed by Render automatically.
 - In YooKassa dashboard set webhook URL to:
   `https://<your-backend-domain>/api/billing/yookassa/webhook`

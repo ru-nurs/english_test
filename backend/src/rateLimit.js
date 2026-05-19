@@ -36,11 +36,11 @@ function createRateLimiter({
     nextCleanupAt = now + cleanupIntervalMs;
   }
 
-  function cleanupDb(now) {
+  async function cleanupDb(now) {
     if (!db || now < nextCleanupAt) {
       return;
     }
-    db.prepare("DELETE FROM rate_limits WHERE reset_at <= ?").run(now);
+    await db.run("DELETE FROM rate_limits WHERE reset_at <= ?", [now]);
     nextCleanupAt = now + cleanupIntervalMs;
   }
 
@@ -52,20 +52,21 @@ function createRateLimiter({
     return retryAfterSeconds;
   }
 
-  function useDbLimiter(req, res, next, bucketKey, now) {
-    cleanupDb(now);
+  async function useDbLimiter(req, res, next, bucketKey, now) {
+    await cleanupDb(now);
 
-    const row = db
-      .prepare("SELECT count, reset_at FROM rate_limits WHERE key = ? LIMIT 1")
-      .get(bucketKey);
+    const row = await db.get("SELECT count, reset_at FROM rate_limits WHERE key = ? LIMIT 1", [
+      bucketKey,
+    ]);
 
     if (!row || Number(row.reset_at) <= now) {
       const resetAt = now + windowMs;
-      db.prepare(
+      await db.run(
         `INSERT INTO rate_limits (key, count, reset_at)
          VALUES (?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET count = excluded.count, reset_at = excluded.reset_at`
-      ).run(bucketKey, 1, resetAt);
+         ON CONFLICT(key) DO UPDATE SET count = excluded.count, reset_at = excluded.reset_at`,
+        [bucketKey, 1, resetAt]
+      );
       applyHeaders(res, { limit: maxRequests, remaining: maxRequests - 1, resetAt });
       return next();
     }
@@ -81,7 +82,7 @@ function createRateLimiter({
       });
     }
 
-    db.prepare("UPDATE rate_limits SET count = count + 1 WHERE key = ?").run(bucketKey);
+    await db.run("UPDATE rate_limits SET count = count + 1 WHERE key = ?", [bucketKey]);
     applyHeaders(res, {
       limit: maxRequests,
       remaining: maxRequests - (used + 1),
@@ -123,7 +124,7 @@ function createRateLimiter({
     return next();
   }
 
-  return function rateLimitMiddleware(req, res, next) {
+  return async function rateLimitMiddleware(req, res, next) {
     const now = Date.now();
     const principal = String(resolveKey(req) || "anonymous");
     const bucketKey = `${keyPrefix}:${principal}`;

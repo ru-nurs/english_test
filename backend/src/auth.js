@@ -49,7 +49,7 @@ function createAuth({ repositories, config }) {
     return String(cookies[cookieName] || "").trim();
   }
 
-  function resolveUserFromAccessToken(req) {
+  async function resolveUserFromAccessToken(req) {
     if (req.userResolved) {
       return;
     }
@@ -65,7 +65,7 @@ function createAuth({ repositories, config }) {
     }
 
     const tokenHash = hashToken(token);
-    const resolved = repositories.findSessionWithUserByAccessHash(tokenHash, nowIso());
+    const resolved = await repositories.findSessionWithUserByAccessHash(tokenHash, nowIso());
     if (!resolved) {
       return;
     }
@@ -76,21 +76,21 @@ function createAuth({ repositories, config }) {
     req.sessionId = resolved.session.id;
   }
 
-  function optionalAuth(req, res, next) {
-    resolveUserFromAccessToken(req);
+  async function optionalAuth(req, res, next) {
+    await resolveUserFromAccessToken(req);
     return next();
   }
 
-  function requireAuth(req, res, next) {
-    resolveUserFromAccessToken(req);
+  async function requireAuth(req, res, next) {
+    await resolveUserFromAccessToken(req);
     if (!req.user) {
       return res.status(401).json({ error: "Authentication required" });
     }
     return next();
   }
 
-  function requireAdmin(req, res, next) {
-    resolveUserFromAccessToken(req);
+  async function requireAdmin(req, res, next) {
+    await resolveUserFromAccessToken(req);
     if (!req.user) {
       return res.status(401).json({ error: "Authentication required" });
     }
@@ -100,8 +100,8 @@ function createAuth({ repositories, config }) {
     return next();
   }
 
-  function requirePro(req, res, next) {
-    resolveUserFromAccessToken(req);
+  async function requirePro(req, res, next) {
+    await resolveUserFromAccessToken(req);
     if (!req.user) {
       return res.status(401).json({ error: "Authentication required" });
     }
@@ -111,12 +111,12 @@ function createAuth({ repositories, config }) {
     return next();
   }
 
-  function issueSession(userId) {
+  async function issueSession(userId) {
     const accessToken = makeToken();
     const refreshToken = makeToken();
     const createdAt = nowIso();
 
-    repositories.createSession({
+    await repositories.createSession({
       id: withGeneratedId("session"),
       userId,
       accessTokenHash: hashToken(accessToken),
@@ -133,14 +133,14 @@ function createAuth({ repositories, config }) {
     };
   }
 
-  function refreshSession(refreshToken) {
+  async function refreshSession(refreshToken) {
     const refreshTokenHash = hashToken(refreshToken);
-    const session = repositories.findSessionByRefreshHash(refreshTokenHash, nowIso());
+    const session = await repositories.findSessionByRefreshHash(refreshTokenHash, nowIso());
     if (!session) {
       return null;
     }
 
-    const user = repositories.findUserById(session.userId);
+    const user = await repositories.findUserById(session.userId);
     if (!user) {
       return null;
     }
@@ -149,7 +149,7 @@ function createAuth({ repositories, config }) {
     const nextRefreshToken = makeToken();
     const updatedAt = nowIso();
 
-    const rotated = repositories.rotateSessionTokens({
+    const rotated = await repositories.rotateSessionTokens({
       sessionId: session.id,
       accessTokenHash: hashToken(nextAccessToken),
       refreshTokenHash: hashToken(nextRefreshToken),
@@ -169,13 +169,13 @@ function createAuth({ repositories, config }) {
     };
   }
 
-  function revokeCurrentSession(accessToken) {
+  async function revokeCurrentSession(accessToken) {
     const tokenHash = hashToken(accessToken);
-    repositories.revokeSessionByAccessHash(tokenHash, nowIso());
+    await repositories.revokeSessionByAccessHash(tokenHash, nowIso());
   }
 
-  function revokeByRefreshToken(refreshToken) {
-    repositories.revokeSessionByRefreshHash(hashToken(refreshToken), nowIso());
+  async function revokeByRefreshToken(refreshToken) {
+    await repositories.revokeSessionByRefreshHash(hashToken(refreshToken), nowIso());
   }
 
   function readTokenFromCookie(req, cookieName) {

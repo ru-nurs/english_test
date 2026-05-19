@@ -1,8 +1,10 @@
-﻿function parseTestRow(row) {
+function parseTestRow(row) {
   if (!row) {
     return null;
   }
-
+  if (typeof row.payload_json === "object") {
+    return row.payload_json;
+  }
   try {
     return JSON.parse(row.payload_json);
   } catch (error) {
@@ -15,11 +17,33 @@ function serializeTest(test) {
 }
 
 function parseJsonOrFallback(raw, fallback) {
+  if (raw && typeof raw === "object") {
+    return raw;
+  }
   try {
     return JSON.parse(String(raw || ""));
   } catch (error) {
     return fallback;
   }
+}
+
+function mapUserRow(row, { includePassword = true } = {}) {
+  if (!row) {
+    return null;
+  }
+  const user = {
+    id: row.id,
+    email: row.email,
+    displayName: row.display_name || "",
+    role: row.role,
+    isPro: Boolean(row.is_pro),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+  if (includePassword) {
+    user.passwordHash = row.password_hash;
+  }
+  return user;
 }
 
 function mapBillingPaymentRow(row) {
@@ -50,159 +74,123 @@ function mapBillingPaymentRow(row) {
 }
 
 function createRepositories(db) {
-  function createUser(user) {
-    db.prepare(
+  async function createUser(user) {
+    await db.run(
       `INSERT INTO users (id, email, display_name, password_hash, role, is_pro, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      user.id,
-      user.email,
-      user.displayName || "",
-      user.passwordHash,
-      user.role,
-      user.isPro ? 1 : 0,
-      user.createdAt,
-      user.updatedAt
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        user.id,
+        user.email,
+        user.displayName || "",
+        user.passwordHash,
+        user.role,
+        Boolean(user.isPro),
+        user.createdAt,
+        user.updatedAt,
+      ]
     );
   }
 
-  function findUserByEmail(email) {
-    const row = db
-      .prepare(
-        `SELECT id, email, display_name, password_hash, role, is_pro, created_at, updated_at
-         FROM users WHERE email = ? LIMIT 1`
-      )
-      .get(email);
-
-    if (!row) {
-      return null;
-    }
-
-    return {
-      id: row.id,
-      email: row.email,
-      displayName: row.display_name || "",
-      passwordHash: row.password_hash,
-      role: row.role,
-      isPro: Boolean(row.is_pro),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
+  async function findUserByEmail(email) {
+    const row = await db.get(
+      `SELECT id, email, display_name, password_hash, role, is_pro, created_at, updated_at
+       FROM users WHERE email = ? LIMIT 1`,
+      [email]
+    );
+    return mapUserRow(row);
   }
 
-  function findUserById(id) {
-    const row = db
-      .prepare(
-        `SELECT id, email, display_name, password_hash, role, is_pro, created_at, updated_at
-         FROM users WHERE id = ? LIMIT 1`
-      )
-      .get(id);
-
-    if (!row) {
-      return null;
-    }
-
-    return {
-      id: row.id,
-      email: row.email,
-      displayName: row.display_name || "",
-      passwordHash: row.password_hash,
-      role: row.role,
-      isPro: Boolean(row.is_pro),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
+  async function findUserById(id) {
+    const row = await db.get(
+      `SELECT id, email, display_name, password_hash, role, is_pro, created_at, updated_at
+       FROM users WHERE id = ? LIMIT 1`,
+      [id]
+    );
+    return mapUserRow(row);
   }
 
-  function countAdmins() {
-    const row = db
-      .prepare(`SELECT COUNT(*) AS count FROM users WHERE role = 'admin'`)
-      .get();
+  async function countAdmins() {
+    const row = await db.get(`SELECT COUNT(*) AS count FROM users WHERE role = 'admin'`);
     return Number(row?.count || 0);
   }
 
-  function listUsers() {
-    const rows = db
-      .prepare(
-        `SELECT id, email, display_name, role, is_pro, created_at, updated_at FROM users ORDER BY created_at DESC`
-      )
-      .all();
-
-    return rows.map((row) => ({
-      id: row.id,
-      email: row.email,
-      displayName: row.display_name || "",
-      role: row.role,
-      isPro: Boolean(row.is_pro),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+  async function listUsers() {
+    const rows = await db.all(
+      `SELECT id, email, display_name, role, is_pro, created_at, updated_at FROM users ORDER BY created_at DESC`
+    );
+    return rows.map((row) => mapUserRow(row, { includePassword: false }));
   }
 
-  function updateUserRole(userId, role, updatedAt) {
-    const result = db
-      .prepare(`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`)
-      .run(role, updatedAt, userId);
+  async function updateUserRole(userId, role, updatedAt) {
+    const result = await db.run(`UPDATE users SET role = ?, updated_at = ? WHERE id = ?`, [
+      role,
+      updatedAt,
+      userId,
+    ]);
     return result.changes > 0;
   }
 
-  function updateUserPro(userId, isPro, updatedAt) {
-    const result = db
-      .prepare(`UPDATE users SET is_pro = ?, updated_at = ? WHERE id = ?`)
-      .run(isPro ? 1 : 0, updatedAt, userId);
+  async function updateUserPro(userId, isPro, updatedAt) {
+    const result = await db.run(`UPDATE users SET is_pro = ?, updated_at = ? WHERE id = ?`, [
+      Boolean(isPro),
+      updatedAt,
+      userId,
+    ]);
     return result.changes > 0;
   }
 
-  function updateUserDisplayName(userId, displayName, updatedAt) {
-    const result = db
-      .prepare(`UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?`)
-      .run(displayName || "", updatedAt, userId);
+  async function updateUserDisplayName(userId, displayName, updatedAt) {
+    const result = await db.run(`UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?`, [
+      displayName || "",
+      updatedAt,
+      userId,
+    ]);
     return result.changes > 0;
   }
 
-  function createSession(session) {
-    db.prepare(
+  async function createSession(session) {
+    await db.run(
       `INSERT INTO sessions (
         id, user_id, access_token_hash, refresh_token_hash, access_expires_at,
         refresh_expires_at, created_at, updated_at, revoked_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`
-    ).run(
-      session.id,
-      session.userId,
-      session.accessTokenHash,
-      session.refreshTokenHash,
-      session.accessExpiresAt,
-      session.refreshExpiresAt,
-      session.createdAt,
-      session.updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      [
+        session.id,
+        session.userId,
+        session.accessTokenHash,
+        session.refreshTokenHash,
+        session.accessExpiresAt,
+        session.refreshExpiresAt,
+        session.createdAt,
+        session.updatedAt,
+      ]
     );
   }
 
-  function findSessionWithUserByAccessHash(accessTokenHash, nowIso) {
-    const row = db
-      .prepare(
-        `SELECT
-           s.id AS session_id,
-           s.user_id,
-           s.access_expires_at,
-           s.refresh_expires_at,
-           s.revoked_at,
-           u.id AS user_id_real,
-           u.email,
-           u.display_name,
-           u.password_hash,
-           u.role,
-           u.is_pro,
-           u.created_at,
-           u.updated_at
-         FROM sessions s
-         JOIN users u ON u.id = s.user_id
-         WHERE s.access_token_hash = ?
-           AND s.revoked_at IS NULL
-           AND s.access_expires_at > ?
-         LIMIT 1`
-      )
-      .get(accessTokenHash, nowIso);
+  async function findSessionWithUserByAccessHash(accessTokenHash, nowIso) {
+    const row = await db.get(
+      `SELECT
+         s.id AS session_id,
+         s.user_id,
+         s.access_expires_at,
+         s.refresh_expires_at,
+         s.revoked_at,
+         u.id AS user_id_real,
+         u.email,
+         u.display_name,
+         u.password_hash,
+         u.role,
+         u.is_pro,
+         u.created_at,
+         u.updated_at
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.access_token_hash = ?
+         AND s.revoked_at IS NULL
+         AND s.access_expires_at > ?
+       LIMIT 1`,
+      [accessTokenHash, nowIso]
+    );
 
     if (!row) {
       return null;
@@ -215,30 +203,29 @@ function createRepositories(db) {
         accessExpiresAt: row.access_expires_at,
         refreshExpiresAt: row.refresh_expires_at,
       },
-      user: {
+      user: mapUserRow({
         id: row.user_id_real,
         email: row.email,
-        displayName: row.display_name || "",
-        passwordHash: row.password_hash,
+        display_name: row.display_name,
+        password_hash: row.password_hash,
         role: row.role,
-        isPro: Boolean(row.is_pro),
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      },
+        is_pro: row.is_pro,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      }),
     };
   }
 
-  function findSessionByRefreshHash(refreshTokenHash, nowIso) {
-    const row = db
-      .prepare(
-        `SELECT id, user_id, refresh_expires_at, revoked_at
-         FROM sessions
-         WHERE refresh_token_hash = ?
-           AND revoked_at IS NULL
-           AND refresh_expires_at > ?
-         LIMIT 1`
-      )
-      .get(refreshTokenHash, nowIso);
+  async function findSessionByRefreshHash(refreshTokenHash, nowIso) {
+    const row = await db.get(
+      `SELECT id, user_id, refresh_expires_at, revoked_at
+       FROM sessions
+       WHERE refresh_token_hash = ?
+         AND revoked_at IS NULL
+         AND refresh_expires_at > ?
+       LIMIT 1`,
+      [refreshTokenHash, nowIso]
+    );
 
     if (!row) {
       return null;
@@ -252,7 +239,7 @@ function createRepositories(db) {
     };
   }
 
-  function rotateSessionTokens({
+  async function rotateSessionTokens({
     sessionId,
     accessTokenHash,
     refreshTokenHash,
@@ -260,94 +247,83 @@ function createRepositories(db) {
     refreshExpiresAt,
     updatedAt,
   }) {
-    const result = db
-      .prepare(
-        `UPDATE sessions
-         SET access_token_hash = ?, refresh_token_hash = ?, access_expires_at = ?, refresh_expires_at = ?, updated_at = ?
-         WHERE id = ? AND revoked_at IS NULL`
-      )
-      .run(
-        accessTokenHash,
-        refreshTokenHash,
-        accessExpiresAt,
-        refreshExpiresAt,
-        updatedAt,
-        sessionId
-      );
-
+    const result = await db.run(
+      `UPDATE sessions
+       SET access_token_hash = ?, refresh_token_hash = ?, access_expires_at = ?, refresh_expires_at = ?, updated_at = ?
+       WHERE id = ? AND revoked_at IS NULL`,
+      [accessTokenHash, refreshTokenHash, accessExpiresAt, refreshExpiresAt, updatedAt, sessionId]
+    );
     return result.changes > 0;
   }
 
-  function revokeSessionByAccessHash(accessTokenHash, revokedAt) {
-    db.prepare(`UPDATE sessions SET revoked_at = ?, updated_at = ? WHERE access_token_hash = ?`).run(
+  async function revokeSessionByAccessHash(accessTokenHash, revokedAt) {
+    await db.run(`UPDATE sessions SET revoked_at = ?, updated_at = ? WHERE access_token_hash = ?`, [
       revokedAt,
       revokedAt,
-      accessTokenHash
-    );
+      accessTokenHash,
+    ]);
   }
 
-  function revokeSessionByRefreshHash(refreshTokenHash, revokedAt) {
-    db.prepare(`UPDATE sessions SET revoked_at = ?, updated_at = ? WHERE refresh_token_hash = ?`).run(
+  async function revokeSessionByRefreshHash(refreshTokenHash, revokedAt) {
+    await db.run(`UPDATE sessions SET revoked_at = ?, updated_at = ? WHERE refresh_token_hash = ?`, [
       revokedAt,
       revokedAt,
-      refreshTokenHash
-    );
+      refreshTokenHash,
+    ]);
   }
 
-  function revokeAllSessionsForUser(userId, revokedAt) {
-    db.prepare(`UPDATE sessions SET revoked_at = ?, updated_at = ? WHERE user_id = ?`).run(
+  async function revokeAllSessionsForUser(userId, revokedAt) {
+    await db.run(`UPDATE sessions SET revoked_at = ?, updated_at = ? WHERE user_id = ?`, [
       revokedAt,
       revokedAt,
-      userId
-    );
+      userId,
+    ]);
   }
 
-  function cleanupExpiredSessions(now) {
-    db.prepare(
+  async function cleanupExpiredSessions(now) {
+    await db.run(
       `DELETE FROM sessions
        WHERE revoked_at IS NOT NULL
-          OR refresh_expires_at <= ?`
-    ).run(now);
+          OR refresh_expires_at <= ?`,
+      [now]
+    );
   }
 
-  function listTests() {
-    const rows = db.prepare(`SELECT payload_json FROM tests ORDER BY created_at ASC`).all();
+  async function listTests() {
+    const rows = await db.all(`SELECT payload_json FROM tests ORDER BY created_at ASC`);
     return rows.map(parseTestRow).filter(Boolean);
   }
 
-  function getTestById(id) {
-    const row = db
-      .prepare(`SELECT payload_json FROM tests WHERE id = ? LIMIT 1`)
-      .get(id);
+  async function getTestById(id) {
+    const row = await db.get(`SELECT payload_json FROM tests WHERE id = ? LIMIT 1`, [id]);
     return parseTestRow(row);
   }
 
-  function createTest(test) {
-    db.prepare(
+  async function createTest(test) {
+    await db.run(
       `INSERT INTO tests (
         id, title, description, status, access, source, payload_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      test.id,
-      test.title,
-      test.description,
-      test.status,
-      test.access,
-      test.source,
-      serializeTest(test),
-      test.createdAt,
-      test.updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?)`,
+      [
+        test.id,
+        test.title,
+        test.description,
+        test.status,
+        test.access,
+        test.source,
+        serializeTest(test),
+        test.createdAt,
+        test.updatedAt,
+      ]
     );
   }
 
-  function updateTest(test) {
-    const result = db
-      .prepare(
-        `UPDATE tests
-         SET title = ?, description = ?, status = ?, access = ?, source = ?, payload_json = ?, updated_at = ?
-         WHERE id = ?`
-      )
-      .run(
+  async function updateTest(test) {
+    const result = await db.run(
+      `UPDATE tests
+       SET title = ?, description = ?, status = ?, access = ?, source = ?, payload_json = ?::jsonb, updated_at = ?
+       WHERE id = ?`,
+      [
         test.title,
         test.description,
         test.status,
@@ -355,42 +331,35 @@ function createRepositories(db) {
         test.source,
         serializeTest(test),
         test.updatedAt,
-        test.id
-      );
-
+        test.id,
+      ]
+    );
     return result.changes > 0;
   }
 
-  function setTestStatus(testId, status, updatedAt) {
-    const existing = getTestById(testId);
+  async function setTestStatus(testId, status, updatedAt) {
+    const existing = await getTestById(testId);
     if (!existing) {
       return null;
     }
-
-    const updated = {
-      ...existing,
-      status,
-      updatedAt,
-    };
-
-    updateTest(updated);
+    const updated = { ...existing, status, updatedAt };
+    await updateTest(updated);
     return updated;
   }
 
-  function deleteTestById(testId) {
-    const result = db.prepare(`DELETE FROM tests WHERE id = ?`).run(testId);
+  async function deleteTestById(testId) {
+    const result = await db.run(`DELETE FROM tests WHERE id = ?`, [testId]);
     return result.changes > 0;
   }
 
-  function listAttemptsByUser(userId) {
-    const rows = db
-      .prepare(
-        `SELECT id, user_id, test_id, task1, task2, task3, total_score, score_source, created_at
-         FROM attempts
-         WHERE user_id = ?
-         ORDER BY created_at DESC`
-      )
-      .all(userId);
+  async function listAttemptsByUser(userId) {
+    const rows = await db.all(
+      `SELECT id, user_id, test_id, task1, task2, task3, total_score, score_source, created_at
+       FROM attempts
+       WHERE user_id = ?
+       ORDER BY created_at DESC`,
+      [userId]
+    );
 
     return rows.map((row) => ({
       id: row.id,
@@ -407,66 +376,67 @@ function createRepositories(db) {
     }));
   }
 
-  function createAttempt(attempt) {
-    db.prepare(
+  async function createAttempt(attempt) {
+    await db.run(
       `INSERT INTO attempts (id, user_id, test_id, task1, task2, task3, total_score, score_source, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      attempt.id,
-      attempt.userId,
-      attempt.testId,
-      attempt.taskScores.task1,
-      attempt.taskScores.task2,
-      attempt.taskScores.task3,
-      attempt.totalScore,
-      attempt.scoreSource || "unverified",
-      attempt.createdAt
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        attempt.id,
+        attempt.userId,
+        attempt.testId,
+        attempt.taskScores.task1,
+        attempt.taskScores.task2,
+        attempt.taskScores.task3,
+        attempt.totalScore,
+        attempt.scoreSource || "unverified",
+        attempt.createdAt,
+      ]
     );
   }
 
-  function createBillingPayment(payment) {
-    db.prepare(
+  async function createBillingPayment(payment) {
+    await db.run(
       `INSERT INTO billing_payments (
         id, user_id, provider, plan_code, amount_value, amount_currency, status, paid,
         confirmation_url, return_url, idempotence_key, metadata_json, raw_json,
         created_at, updated_at, completed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      payment.id,
-      payment.userId,
-      payment.provider,
-      payment.planCode,
-      payment.amount?.value || "",
-      payment.amount?.currency || "RUB",
-      payment.status,
-      payment.paid ? 1 : 0,
-      payment.confirmationUrl || "",
-      payment.returnUrl || "",
-      payment.idempotenceKey || "",
-      JSON.stringify(payment.metadata || {}),
-      JSON.stringify(payment.raw || {}),
-      payment.createdAt,
-      payment.updatedAt,
-      payment.completedAt || null
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?, ?, ?)`,
+      [
+        payment.id,
+        payment.userId,
+        payment.provider,
+        payment.planCode,
+        payment.amount?.value || "",
+        payment.amount?.currency || "RUB",
+        payment.status,
+        Boolean(payment.paid),
+        payment.confirmationUrl || "",
+        payment.returnUrl || "",
+        payment.idempotenceKey || "",
+        JSON.stringify(payment.metadata || {}),
+        JSON.stringify(payment.raw || {}),
+        payment.createdAt,
+        payment.updatedAt,
+        payment.completedAt || null,
+      ]
     );
   }
 
-  function findBillingPaymentById(paymentId) {
-    const row = db
-      .prepare(
-        `SELECT
-          id, user_id, provider, plan_code, amount_value, amount_currency, status, paid,
-          confirmation_url, return_url, idempotence_key, metadata_json, raw_json,
-          created_at, updated_at, completed_at
-         FROM billing_payments
-         WHERE id = ?
-         LIMIT 1`
-      )
-      .get(paymentId);
+  async function findBillingPaymentById(paymentId) {
+    const row = await db.get(
+      `SELECT
+        id, user_id, provider, plan_code, amount_value, amount_currency, status, paid,
+        confirmation_url, return_url, idempotence_key, metadata_json, raw_json,
+        created_at, updated_at, completed_at
+       FROM billing_payments
+       WHERE id = ?
+       LIMIT 1`,
+      [paymentId]
+    );
     return mapBillingPaymentRow(row);
   }
 
-  function updateBillingPaymentState({
+  async function updateBillingPaymentState({
     paymentId,
     status,
     paid,
@@ -476,7 +446,7 @@ function createRepositories(db) {
     updatedAt,
     completedAt,
   }) {
-    const current = findBillingPaymentById(paymentId);
+    const current = await findBillingPaymentById(paymentId);
     if (!current) {
       return null;
     }
@@ -490,22 +460,21 @@ function createRepositories(db) {
     const nextUpdatedAt = updatedAt || current.updatedAt;
     const nextCompletedAt = completedAt !== undefined ? completedAt : current.completedAt || null;
 
-    const result = db
-      .prepare(
-        `UPDATE billing_payments
-         SET status = ?, paid = ?, confirmation_url = ?, raw_json = ?, metadata_json = ?, updated_at = ?, completed_at = ?
-         WHERE id = ?`
-      )
-      .run(
+    const result = await db.run(
+      `UPDATE billing_payments
+       SET status = ?, paid = ?, confirmation_url = ?, raw_json = ?::jsonb, metadata_json = ?::jsonb, updated_at = ?, completed_at = ?
+       WHERE id = ?`,
+      [
         nextStatus,
-        nextPaid ? 1 : 0,
+        nextPaid,
         nextConfirmationUrl,
         JSON.stringify(nextRaw || {}),
         JSON.stringify(nextMetadata || {}),
         nextUpdatedAt,
         nextCompletedAt || null,
-        paymentId
-      );
+        paymentId,
+      ]
+    );
 
     if (result.changes <= 0) {
       return null;

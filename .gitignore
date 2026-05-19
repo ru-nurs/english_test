@@ -9,9 +9,8 @@ backend/.env
 frontend/.env
 frontend/.env.local
 
-# Runtime data (keep seeded json + media in repo)
-backend/data/app.sqlite
-backend/data/app.sqlite-*
+# Runtime data
+backend/data/
 
 # OS/editor
 .DS_Store

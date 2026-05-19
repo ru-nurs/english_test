@@ -23,46 +23,14 @@ const {
 const { validateAudioUpload } = require("./mediaValidation");
 const { createClient: createYooKassaClient } = require("./yookassa");
 
-const db = initDatabase();
-const repositories = createRepositories(db);
-const auth = createAuth({ repositories, config });
-const yooKassa = createYooKassaClient(config);
-
-const authRateLimit = createRateLimiter({
-  keyPrefix: "auth",
-  windowMs: config.LOGIN_RATE_LIMIT_WINDOW_MS,
-  maxRequests: config.LOGIN_RATE_LIMIT_MAX,
-  enabled: config.IS_PRODUCTION,
-  db,
-});
-const transcribeRateLimit = createRateLimiter({
-  keyPrefix: "transcribe",
-  windowMs: config.TRANSCRIBE_RATE_LIMIT_WINDOW_MS,
-  maxRequests: config.TRANSCRIBE_RATE_LIMIT_MAX,
-  enabled: config.IS_PRODUCTION,
-  db,
-});
-const evaluateRateLimit = createRateLimiter({
-  keyPrefix: "evaluate",
-  windowMs: config.EVALUATE_RATE_LIMIT_WINDOW_MS,
-  maxRequests: config.EVALUATE_RATE_LIMIT_MAX,
-  enabled: config.IS_PRODUCTION,
-  db,
-});
-const adminMutationRateLimit = createRateLimiter({
-  keyPrefix: "admin-mutation",
-  windowMs: config.ADMIN_MUTATION_RATE_LIMIT_WINDOW_MS,
-  maxRequests: config.ADMIN_MUTATION_RATE_LIMIT_MAX,
-  enabled: config.IS_PRODUCTION,
-  db,
-});
-const adminGenerateRateLimit = createRateLimiter({
-  keyPrefix: "admin-generate",
-  windowMs: config.ADMIN_GENERATE_RATE_LIMIT_WINDOW_MS,
-  maxRequests: config.ADMIN_GENERATE_RATE_LIMIT_MAX,
-  enabled: config.IS_PRODUCTION,
-  db,
-});
+let repositories;
+let auth;
+let yooKassa;
+let authRateLimit;
+let transcribeRateLimit;
+let evaluateRateLimit;
+let adminMutationRateLimit;
+let adminGenerateRateLimit;
 
 const TEMP_UPLOAD_STORAGE = multer.diskStorage({
   destination: (req, file, callback) => {
@@ -159,22 +127,22 @@ function mapYooKassaPaymentToSnapshot(payment, fallback = {}) {
   };
 }
 
-function finalizeProIfNeeded({ userId, payment, updatedAt }) {
+async function finalizeProIfNeeded({ userId, payment, updatedAt }) {
   if (!payment || payment.status !== "succeeded" || !payment.paid) {
     return false;
   }
-  const user = repositories.findUserById(userId);
+  const user = await repositories.findUserById(userId);
   if (!user) {
     return false;
   }
   if (user.isPro) {
     return true;
   }
-  repositories.updateUserPro(userId, true, updatedAt);
+  await repositories.updateUserPro(userId, true, updatedAt);
   return true;
 }
 
-function persistYooKassaPayment({
+async function persistYooKassaPayment({
   providerPayment,
   fallbackUserId = "",
   returnUrl = "",
@@ -189,10 +157,10 @@ function persistYooKassaPayment({
     return null;
   }
 
-  const existing = repositories.findBillingPaymentById(snapshot.id);
+  const existing = await repositories.findBillingPaymentById(snapshot.id);
   const completedAt = snapshot.status === "succeeded" && snapshot.paid ? updatedAt : null;
   if (!existing) {
-    repositories.createBillingPayment({
+    await repositories.createBillingPayment({
       id: snapshot.id,
       userId,
       provider: "yookassa",
@@ -656,7 +624,47 @@ async function generateAudioAssetsForTest({ test, overwrite = false, voice }) {
   return { updatedTest, generatedItems, failedItems, totalTargets: targets.length };
 }
 
-function createApp() {
+async function createApp() {
+  const db = await initDatabase();
+  repositories = createRepositories(db);
+  auth = createAuth({ repositories, config });
+  yooKassa = createYooKassaClient(config);
+  authRateLimit = createRateLimiter({
+    keyPrefix: "auth",
+    windowMs: config.LOGIN_RATE_LIMIT_WINDOW_MS,
+    maxRequests: config.LOGIN_RATE_LIMIT_MAX,
+    enabled: config.IS_PRODUCTION,
+    db,
+  });
+  transcribeRateLimit = createRateLimiter({
+    keyPrefix: "transcribe",
+    windowMs: config.TRANSCRIBE_RATE_LIMIT_WINDOW_MS,
+    maxRequests: config.TRANSCRIBE_RATE_LIMIT_MAX,
+    enabled: config.IS_PRODUCTION,
+    db,
+  });
+  evaluateRateLimit = createRateLimiter({
+    keyPrefix: "evaluate",
+    windowMs: config.EVALUATE_RATE_LIMIT_WINDOW_MS,
+    maxRequests: config.EVALUATE_RATE_LIMIT_MAX,
+    enabled: config.IS_PRODUCTION,
+    db,
+  });
+  adminMutationRateLimit = createRateLimiter({
+    keyPrefix: "admin-mutation",
+    windowMs: config.ADMIN_MUTATION_RATE_LIMIT_WINDOW_MS,
+    maxRequests: config.ADMIN_MUTATION_RATE_LIMIT_MAX,
+    enabled: config.IS_PRODUCTION,
+    db,
+  });
+  adminGenerateRateLimit = createRateLimiter({
+    keyPrefix: "admin-generate",
+    windowMs: config.ADMIN_GENERATE_RATE_LIMIT_WINDOW_MS,
+    maxRequests: config.ADMIN_GENERATE_RATE_LIMIT_MAX,
+    enabled: config.IS_PRODUCTION,
+    db,
+  });
+
   const app = express();
   if (config.TRUST_PROXY) {
     app.set("trust proxy", 1);
@@ -737,17 +745,19 @@ function createApp() {
     return res.json({ ok: true, now: nowIso() });
   });
 
-  repositories.cleanupExpiredSessions(nowIso());
+  await repositories.cleanupExpiredSessions(nowIso());
   const sessionCleanupTimer = setInterval(() => {
-    repositories.cleanupExpiredSessions(nowIso());
+    repositories.cleanupExpiredSessions(nowIso()).catch((error) => {
+      console.error("Failed to cleanup expired sessions:", error);
+    });
   }, config.SESSION_CLEANUP_INTERVAL_MS);
   if (typeof sessionCleanupTimer.unref === "function") {
     sessionCleanupTimer.unref();
   }
 
-  app.get("/api/auth/bootstrap-status", (req, res) => {
+  app.get("/api/auth/bootstrap-status", async (req, res) => {
     return res.json({
-      enabled: isBootstrapSetupKeyConfigured() && repositories.countAdmins() === 0,
+      enabled: isBootstrapSetupKeyConfigured() && (await repositories.countAdmins()) === 0,
     });
   });
 
@@ -769,7 +779,7 @@ function createApp() {
       return res.status(400).json({ error: "displayName must be at least 2 characters" });
     }
 
-    const existingUser = repositories.findUserByEmail(email);
+    const existingUser = await repositories.findUserByEmail(email);
     if (existingUser) {
       return res.status(409).json({ error: "User already exists" });
     }
@@ -785,8 +795,8 @@ function createApp() {
       updatedAt: nowIso(),
     };
 
-    repositories.createUser(user);
-    const sessionTokens = auth.issueSession(user.id);
+    await repositories.createUser(user);
+    const sessionTokens = await auth.issueSession(user.id);
     setSessionCookies(res, sessionTokens);
 
     return res.status(201).json({
@@ -813,7 +823,7 @@ function createApp() {
       return res.status(403).json({ error: "Invalid setup key" });
     }
 
-    if (repositories.countAdmins() > 0) {
+    if ((await repositories.countAdmins()) > 0) {
       return res.status(409).json({ error: "Admin account already exists" });
     }
 
@@ -839,8 +849,8 @@ function createApp() {
       updatedAt: nowIso(),
     };
 
-    repositories.createUser(user);
-    const sessionTokens = auth.issueSession(user.id);
+    await repositories.createUser(user);
+    const sessionTokens = await auth.issueSession(user.id);
     setSessionCookies(res, sessionTokens);
 
     return res.status(201).json({
@@ -852,13 +862,13 @@ function createApp() {
     const email = sanitizeEmail(req.body?.email);
     const password = String(req.body?.password || "").trim();
 
-    const user = repositories.findUserByEmail(email);
+    const user = await repositories.findUserByEmail(email);
     const passwordMatches = user ? await verifyPassword(password, user.passwordHash) : false;
     if (!user || !passwordMatches) {
       return res.status(401).json({ error: "Invalid email or password" });
     }
 
-    const sessionTokens = auth.issueSession(user.id);
+    const sessionTokens = await auth.issueSession(user.id);
     setSessionCookies(res, sessionTokens);
 
     return res.json({
@@ -866,7 +876,7 @@ function createApp() {
     });
   });
 
-  app.post("/api/auth/refresh", authRateLimit, (req, res) => {
+  app.post("/api/auth/refresh", authRateLimit, async (req, res) => {
     const refreshToken =
       String(req.body?.refreshToken || "").trim() ||
       auth.readTokenFromCookie(req, config.REFRESH_COOKIE_NAME);
@@ -874,7 +884,7 @@ function createApp() {
       return res.status(400).json({ error: "refreshToken is required" });
     }
 
-    const nextSession = auth.refreshSession(refreshToken);
+    const nextSession = await auth.refreshSession(refreshToken);
     if (!nextSession) {
       clearSessionCookies(res);
       return res.status(401).json({ error: "Refresh token is invalid or expired" });
@@ -886,24 +896,24 @@ function createApp() {
     });
   });
 
-  app.post("/api/auth/logout", auth.requireAuth, (req, res) => {
+  app.post("/api/auth/logout", auth.requireAuth, async (req, res) => {
     if (req.authToken) {
-      auth.revokeCurrentSession(req.authToken);
+      await auth.revokeCurrentSession(req.authToken);
     }
 
     const refreshToken =
       String(req.body?.refreshToken || "").trim() ||
       auth.readTokenFromCookie(req, config.REFRESH_COOKIE_NAME);
     if (refreshToken) {
-      auth.revokeByRefreshToken(refreshToken);
+      await auth.revokeByRefreshToken(refreshToken);
     }
 
     clearSessionCookies(res);
     return res.json({ ok: true });
   });
 
-  app.post("/api/auth/logout-all", auth.requireAuth, (req, res) => {
-    repositories.revokeAllSessionsForUser(req.user.id, nowIso());
+  app.post("/api/auth/logout-all", auth.requireAuth, async (req, res) => {
+    await repositories.revokeAllSessionsForUser(req.user.id, nowIso());
     clearSessionCookies(res);
     return res.json({ ok: true });
   });
@@ -912,18 +922,18 @@ function createApp() {
     return res.json({ user: auth.getPublicUser(req.user) });
   });
 
-  app.patch("/api/auth/profile", auth.requireAuth, (req, res) => {
+  app.patch("/api/auth/profile", auth.requireAuth, async (req, res) => {
     const displayName = normalizeDisplayName(req.body?.displayName || req.body?.name);
     if (displayName.length < 2) {
       return res.status(400).json({ error: "displayName must be at least 2 characters" });
     }
 
-    const updated = repositories.updateUserDisplayName(req.user.id, displayName, nowIso());
+    const updated = await repositories.updateUserDisplayName(req.user.id, displayName, nowIso());
     if (!updated) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    const refreshedUser = repositories.findUserById(req.user.id);
+    const refreshedUser = await repositories.findUserById(req.user.id);
     return res.json({ user: auth.getPublicUser(refreshedUser) });
   });
 
@@ -934,7 +944,7 @@ function createApp() {
       });
     }
 
-    const user = repositories.findUserById(req.user.id);
+    const user = await repositories.findUserById(req.user.id);
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -962,7 +972,7 @@ function createApp() {
         },
       });
 
-      const persisted = persistYooKassaPayment({
+      const persisted = await persistYooKassaPayment({
         providerPayment: payment,
         fallbackUserId: user.id,
         returnUrl: returnBaseUrl,
@@ -996,7 +1006,7 @@ function createApp() {
       return res.status(400).json({ error: "paymentId is required" });
     }
 
-    const existing = repositories.findBillingPaymentById(paymentId);
+    const existing = await repositories.findBillingPaymentById(paymentId);
     if (existing && existing.userId !== req.user.id && req.user.role !== "admin") {
       return res.status(403).json({ error: "Access denied for this payment" });
     }
@@ -1016,7 +1026,7 @@ function createApp() {
 
     const updatedAt = nowIso();
     const nextPayment = providerPayment
-      ? persistYooKassaPayment({
+      ? await persistYooKassaPayment({
           providerPayment,
           fallbackUserId: existing?.userId || req.user.id,
           returnUrl: existing?.returnUrl || resolveBillingReturnBaseUrl(),
@@ -1033,13 +1043,13 @@ function createApp() {
       return res.status(403).json({ error: "Access denied for this payment" });
     }
 
-    finalizeProIfNeeded({
+    await finalizeProIfNeeded({
       userId: nextPayment.userId,
       payment: nextPayment,
       updatedAt,
     });
 
-    const refreshedUser = repositories.findUserById(req.user.id);
+    const refreshedUser = await repositories.findUserById(req.user.id);
     return res.json({
       ok: true,
       payment: {
@@ -1067,13 +1077,13 @@ function createApp() {
     try {
       const providerPayment = await yooKassa.getPayment(paymentId);
       const updatedAt = nowIso();
-      const persisted = persistYooKassaPayment({
+      const persisted = await persistYooKassaPayment({
         providerPayment,
         updatedAt,
       });
 
       if (persisted) {
-        finalizeProIfNeeded({
+        await finalizeProIfNeeded({
           userId: persisted.userId,
           payment: persisted,
           updatedAt,
@@ -1088,8 +1098,8 @@ function createApp() {
     }
   });
 
-  app.get("/api/tests", auth.optionalAuth, (req, res) => {
-    const tests = repositories.listTests();
+  app.get("/api/tests", auth.optionalAuth, async (req, res) => {
+    const tests = await repositories.listTests();
     const isAdmin = req.user?.role === "admin";
     const canUseProFeatures = Boolean(req.user?.isPro || isAdmin);
 
@@ -1107,8 +1117,8 @@ function createApp() {
     return res.json({ tests: visibleTests });
   });
 
-  app.get("/api/tests/:id", auth.optionalAuth, (req, res) => {
-    const test = repositories.getTestById(req.params.id);
+  app.get("/api/tests/:id", auth.optionalAuth, async (req, res) => {
+    const test = await repositories.getTestById(req.params.id);
     if (!test || test.status !== "published") {
       return res.status(404).json({ error: "Test not found" });
     }
@@ -1197,9 +1207,10 @@ function createApp() {
     }
   });
 
-  app.get("/api/attempts", auth.requireAuth, (req, res) => {
-    const testsById = Object.fromEntries(repositories.listTests().map((test) => [test.id, test]));
-    const attempts = repositories.listAttemptsByUser(req.user.id).map((item) => ({
+  app.get("/api/attempts", auth.requireAuth, async (req, res) => {
+    const tests = await repositories.listTests();
+    const testsById = Object.fromEntries(tests.map((test) => [test.id, test]));
+    const attempts = (await repositories.listAttemptsByUser(req.user.id)).map((item) => ({
       ...item,
       testTitle: testsById[item.testId]?.title || item.testId,
     }));
@@ -1207,13 +1218,13 @@ function createApp() {
     return res.json({ attempts });
   });
 
-  app.post("/api/attempts", auth.requireAuth, (req, res) => {
+  app.post("/api/attempts", auth.requireAuth, async (req, res) => {
     const testId = String(req.body?.testId || "").trim();
     if (!testId) {
       return res.status(400).json({ error: "testId is required" });
     }
 
-    const test = repositories.getTestById(testId);
+    const test = await repositories.getTestById(testId);
     if (!test) {
       return res.status(404).json({ error: "Test not found" });
     }
@@ -1306,7 +1317,7 @@ function createApp() {
           10
       ) / 10;
 
-    repositories.createAttempt({
+    await repositories.createAttempt({
       id: withGeneratedId("attempt"),
       userId: req.user.id,
       testId,
@@ -1324,8 +1335,8 @@ function createApp() {
     });
   });
 
-  app.get("/api/admin/tests", auth.requireAdmin, (req, res) => {
-    const tests = repositories.listTests().map((test) =>
+  app.get("/api/admin/tests", auth.requireAdmin, async (req, res) => {
+    const tests = (await repositories.listTests()).map((test) =>
       sanitizeTestForClient(test, {
         canUseProFeatures: true,
         isAdmin: true,
@@ -1335,22 +1346,22 @@ function createApp() {
     return res.json({ tests });
   });
 
-  app.post("/api/admin/tests", auth.requireAdmin, adminMutationRateLimit, (req, res) => {
+  app.post("/api/admin/tests", auth.requireAdmin, adminMutationRateLimit, async (req, res) => {
     try {
       const normalized = normalizeTestPayload(req.body || {}, { isNew: true });
-      if (repositories.getTestById(normalized.id)) {
+      if (await repositories.getTestById(normalized.id)) {
         normalized.id = withGeneratedId("test");
       }
-      repositories.createTest(normalized);
+      await repositories.createTest(normalized);
       return res.status(201).json({ test: normalized });
     } catch (error) {
       return res.status(400).json({ error: error.message || "Invalid test payload" });
     }
   });
 
-  app.put("/api/admin/tests/:id", auth.requireAdmin, adminMutationRateLimit, (req, res) => {
+  app.put("/api/admin/tests/:id", auth.requireAdmin, adminMutationRateLimit, async (req, res) => {
     try {
-      const existing = repositories.getTestById(req.params.id);
+      const existing = await repositories.getTestById(req.params.id);
       if (!existing) {
         return res.status(404).json({ error: "Test not found" });
       }
@@ -1364,23 +1375,23 @@ function createApp() {
         { isNew: false }
       );
 
-      repositories.updateTest(normalized);
+      await repositories.updateTest(normalized);
       return res.json({ test: normalized });
     } catch (error) {
       return res.status(400).json({ error: error.message || "Invalid test payload" });
     }
   });
 
-  app.post("/api/admin/tests/:id/publish", auth.requireAdmin, adminMutationRateLimit, (req, res) => {
-    const updated = repositories.setTestStatus(req.params.id, "published", nowIso());
+  app.post("/api/admin/tests/:id/publish", auth.requireAdmin, adminMutationRateLimit, async (req, res) => {
+    const updated = await repositories.setTestStatus(req.params.id, "published", nowIso());
     if (!updated) {
       return res.status(404).json({ error: "Test not found" });
     }
     return res.json({ test: updated });
   });
 
-  app.post("/api/admin/tests/:id/unpublish", auth.requireAdmin, adminMutationRateLimit, (req, res) => {
-    const updated = repositories.setTestStatus(req.params.id, "draft", nowIso());
+  app.post("/api/admin/tests/:id/unpublish", auth.requireAdmin, adminMutationRateLimit, async (req, res) => {
+    const updated = await repositories.setTestStatus(req.params.id, "draft", nowIso());
     if (!updated) {
       return res.status(404).json({ error: "Test not found" });
     }
@@ -1388,19 +1399,19 @@ function createApp() {
   });
 
   app.delete("/api/admin/tests/:id", auth.requireAdmin, adminMutationRateLimit, async (req, res) => {
-    const existing = repositories.getTestById(req.params.id);
+    const existing = await repositories.getTestById(req.params.id);
     if (!existing) {
       return res.status(404).json({ error: "Test not found" });
     }
     const candidateMediaPaths = Array.from(collectUploadMediaPaths(existing));
 
-    const deleted = repositories.deleteTestById(existing.id);
+    const deleted = await repositories.deleteTestById(existing.id);
     if (!deleted) {
       return res.status(500).json({ error: "Failed to delete test" });
     }
 
     const usedPaths = new Set();
-    const remainingTests = repositories.listTests();
+    const remainingTests = await repositories.listTests();
     for (const item of remainingTests) {
       for (const mediaPath of collectUploadMediaPaths(item)) {
         usedPaths.add(mediaPath);
@@ -1423,7 +1434,7 @@ function createApp() {
 
   app.post("/api/admin/tests/generate-ai", auth.requireAdmin, adminGenerateRateLimit, async (req, res) => {
     try {
-      const tests = repositories.listTests();
+      const tests = await repositories.listTests();
       const seedTest = tests.find((item) => item.id === "case-1") || tests[0];
       const generatedPayload = await generateTestWithAi({
         apiKey: config.GROQ_API_KEY,
@@ -1440,7 +1451,7 @@ function createApp() {
         { isNew: true }
       );
 
-      repositories.createTest(normalized);
+      await repositories.createTest(normalized);
       return res.status(201).json({ test: normalized });
     } catch (error) {
       const statusCode = mapProviderErrorStatus(error.message || "");
@@ -1450,7 +1461,7 @@ function createApp() {
 
   app.post("/api/admin/tests/generate-full", auth.requireAdmin, adminGenerateRateLimit, async (req, res) => {
     try {
-      const tests = repositories.listTests();
+      const tests = await repositories.listTests();
       const requestedSeedId = trimText(req.body?.seedTestId);
       const voice = trimText(req.body?.voice) || config.TTS_VOICE;
 
@@ -1484,7 +1495,7 @@ function createApp() {
       const hasGeneratedAudio = generatedItems.length > 0;
       const hasFailures = failedItems.length > 0;
       const testToStore = hasGeneratedAudio ? updatedTest : normalized;
-      repositories.createTest(testToStore);
+      await repositories.createTest(testToStore);
       return res.status(201).json({
         ok: !hasFailures,
         partial: hasFailures,
@@ -1554,7 +1565,7 @@ function createApp() {
     auth.requireAdmin,
     adminGenerateRateLimit,
     async (req, res) => {
-      const test = repositories.getTestById(req.params.id);
+      const test = await repositories.getTestById(req.params.id);
       if (!test) {
         return res.status(404).json({ error: "Test not found" });
       }
@@ -1581,7 +1592,7 @@ function createApp() {
             voice,
           });
         if (generatedItems.length > 0) {
-          repositories.updateTest(updatedTest);
+          await repositories.updateTest(updatedTest);
         }
 
         if (failedItems.length > 0) {
@@ -1644,13 +1655,13 @@ function createApp() {
     }
   );
 
-  app.get("/api/admin/users", auth.requireAdmin, (req, res) => {
-    return res.json({ users: repositories.listUsers() });
+  app.get("/api/admin/users", auth.requireAdmin, async (req, res) => {
+    return res.json({ users: await repositories.listUsers() });
   });
 
-  app.post("/api/admin/users/:id/role", auth.requireAdmin, adminMutationRateLimit, (req, res) => {
+  app.post("/api/admin/users/:id/role", auth.requireAdmin, adminMutationRateLimit, async (req, res) => {
     const nextRole = req.body?.role === "admin" ? "admin" : "user";
-    const targetUser = repositories.findUserById(req.params.id);
+    const targetUser = await repositories.findUserById(req.params.id);
     if (!targetUser) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -1659,20 +1670,20 @@ function createApp() {
       return res.status(400).json({ error: "You cannot remove your own admin role" });
     }
 
-    repositories.updateUserRole(targetUser.id, nextRole, nowIso());
-    const refreshed = repositories.findUserById(targetUser.id);
+    await repositories.updateUserRole(targetUser.id, nextRole, nowIso());
+    const refreshed = await repositories.findUserById(targetUser.id);
     return res.json({ user: auth.getPublicUser(refreshed) });
   });
 
-  app.post("/api/admin/users/:id/pro", auth.requireAdmin, adminMutationRateLimit, (req, res) => {
+  app.post("/api/admin/users/:id/pro", auth.requireAdmin, adminMutationRateLimit, async (req, res) => {
     const isPro = Boolean(req.body?.isPro);
-    const targetUser = repositories.findUserById(req.params.id);
+    const targetUser = await repositories.findUserById(req.params.id);
     if (!targetUser) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    repositories.updateUserPro(targetUser.id, isPro, nowIso());
-    const refreshed = repositories.findUserById(targetUser.id);
+    await repositories.updateUserPro(targetUser.id, isPro, nowIso());
+    const refreshed = await repositories.findUserById(targetUser.id);
     return res.json({ user: auth.getPublicUser(refreshed) });
   });
 

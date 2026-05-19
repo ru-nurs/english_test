@@ -1,10 +1,13 @@
 ﻿const path = require("path");
 
 const ROOT_DIR = path.join(__dirname, "..");
-const DATA_DIR = path.join(ROOT_DIR, "data");
-const MEDIA_DIR = path.join(ROOT_DIR, "media");
+const STORAGE_ROOT = path.resolve(
+  String(process.env.STORAGE_DIR || process.env.RENDER_DISK_MOUNT_PATH || ROOT_DIR).trim()
+);
+const DATA_DIR = path.join(STORAGE_ROOT, "data");
+const MEDIA_DIR = path.join(STORAGE_ROOT, "media");
 const UPLOADS_DIR = path.join(MEDIA_DIR, "uploads");
-const DB_FILE = path.join(DATA_DIR, "app.sqlite");
+const SUPABASE_DB_URL = String(process.env.SUPABASE_DB_URL || process.env.DATABASE_URL || "").trim();
 
 function toPositiveInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -56,11 +59,12 @@ const effectiveCookieSameSite = isProduction ? "none" : requestedCookieSameSite;
 
 const config = {
   ROOT_DIR,
+  STORAGE_ROOT,
   DATA_DIR,
   MEDIA_DIR,
   UPLOADS_DIR,
   TEMP_UPLOADS_DIR: path.join(MEDIA_DIR, "tmp"),
-  DB_FILE,
+  SUPABASE_DB_URL,
   NODE_ENV,
   IS_PRODUCTION: isProduction,
   PORT: toPositiveInt(process.env.PORT, 5000),
