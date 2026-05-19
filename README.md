@@ -5,23 +5,6 @@ Monorepo structure:
 - `frontend` - Next.js app (practice flow, profile, plans, admin)
 - `backend` - Express API (auth, tests, attempts, AI evaluation, admin CRUD)
 
-## Deploy for client demo
-
-Recommended stack:
-
-- `frontend` -> Vercel
-- `backend` -> Render Web Service + Supabase Postgres
-
-Short guide: see `DEPLOY.md`.
-
-## What changed
-
-- Auth now uses hashed passwords (`bcryptjs`) and access+refresh sessions in `HttpOnly` cookies.
-- Session lifecycle includes refresh rotation and logout invalidation.
-- Backend storage uses Supabase Postgres.
-- Added persistent rate limiting for auth, AI/STT and admin mutation/generation endpoints.
-- Audio upload now validates format/mime/signature.
-- Admin role management moved to API/UI (no manual edits in JSON files).
 
 ## Backend start
 
@@ -49,39 +32,6 @@ ADMIN_BOOTSTRAP_KEY=change_me_for_first_admin
 ADMIN_BOOTSTRAP_ENABLED=true
 MEDIA_SIGNING_SECRET=change_me_media_signing
 EVALUATION_TOKEN_SECRET=change_me_eval_proofs
-```
-
-Optional session settings:
-
-```env
-ACCESS_TOKEN_TTL_MS=1800000
-REFRESH_TOKEN_TTL_MS=1209600000
-LOGIN_RATE_LIMIT_WINDOW_MS=600000
-LOGIN_RATE_LIMIT_MAX=8
-TRANSCRIBE_RATE_LIMIT_WINDOW_MS=60000
-TRANSCRIBE_RATE_LIMIT_MAX=20
-EVALUATE_RATE_LIMIT_WINDOW_MS=60000
-EVALUATE_RATE_LIMIT_MAX=30
-ADMIN_MUTATION_RATE_LIMIT_WINDOW_MS=60000
-ADMIN_MUTATION_RATE_LIMIT_MAX=30
-ADMIN_GENERATE_RATE_LIMIT_WINDOW_MS=60000
-ADMIN_GENERATE_RATE_LIMIT_MAX=6
-SESSION_CLEANUP_INTERVAL_MS=900000
-MEDIA_URL_TTL_MS=21600000
-```
-
-## First admin creation
-
-Use the Admin page without login, or call API directly:
-
-`POST /api/auth/bootstrap-admin`
-
-```json
-{
-  "setupKey": "ADMIN_BOOTSTRAP_KEY value",
-  "email": "admin@example.com",
-  "password": "strong_password"
-}
 ```
 
 Bootstrap works only while there are no admin users yet.
