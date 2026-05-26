@@ -162,6 +162,27 @@ function StageStepper({ currentStage }) {
   );
 }
 
+function ReferenceBox({ title = "Эталон", text, audioUrl }) {
+  const hasText = Boolean(String(text || "").trim());
+  const hasAudio = Boolean(String(audioUrl || "").trim());
+  if (!hasText && !hasAudio) {
+    return null;
+  }
+
+  return (
+    <div className="exam-reference-box">
+      <p className="question-card-label">{title}</p>
+      {hasText && <p className="exam-reference-text">{text}</p>}
+      {hasAudio && (
+        <div className="exam-reference-audio-wrap">
+          <span className="exam-reference-audio-label">Прослушать эталон:</span>
+          <audio controls src={audioUrl} className="w-full" />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PracticePage() {
   const backendUrl = getBackendUrl();
 
@@ -181,6 +202,7 @@ export default function PracticePage() {
   const [currentStage, setCurrentStage] = useState(STAGES.PREP);
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(0);
+  const [recordTimerStarted, setRecordTimerStarted] = useState(false);
 
   const [task1Answer, setTask1Answer] = useState(createAnswerState());
   const [task2Answers, setTask2Answers] = useState([]);
@@ -323,11 +345,13 @@ export default function PracticePage() {
         };
 
         recorder.start();
+        setRecordTimerStarted(true);
         recorderRef.current = recorder;
         setRecordingTarget(targetKey);
         recordingTargetRef.current = targetKey;
       } catch (startError) {
         stopStream();
+        setRecordTimerStarted(false);
         setRecordingTarget("");
         recordingTargetRef.current = "";
         setError("Не удалось получить доступ к микрофону. Разрешите доступ и повторите.");
@@ -411,6 +435,7 @@ export default function PracticePage() {
     setCurrentStage(STAGES.PREP);
     setActiveQuestionIndex(0);
     setTimeLeft(0);
+    setRecordTimerStarted(false);
     setInfo("");
     setError("");
     setAiFeedback(null);
@@ -421,17 +446,20 @@ export default function PracticePage() {
 
   const completeRecordStage = useCallback(() => {
     if (currentTask === 1 || currentTask === 3) {
+      setRecordTimerStarted(false);
       setCurrentStage(STAGES.TASK_RESULT);
       return;
     }
 
     if (task2QuestionCount === 0) {
+      setRecordTimerStarted(false);
       setCurrentStage(STAGES.TASK_RESULT);
       return;
     }
 
     setActiveQuestionIndex((prev) => {
       const isLast = prev >= task2QuestionCount - 1;
+      setRecordTimerStarted(false);
       if (isLast) {
         setCurrentStage(STAGES.TASK_RESULT);
         return prev;
@@ -472,6 +500,11 @@ export default function PracticePage() {
           ? selectedTest.tasks.task2.maxAnswerSeconds
           : selectedTest.tasks.task3.maxRecordSeconds;
 
+    if (currentStage === STAGES.RECORD && !recordTimerStarted) {
+      setTimeLeft(Math.max(0, Number(recordSeconds) || 0));
+      return undefined;
+    }
+
     const initialSeconds = currentStage === STAGES.PREP ? prepSeconds : recordSeconds;
     let seconds = Math.max(0, Number(initialSeconds) || 0);
     setTimeLeft(seconds);
@@ -500,11 +533,12 @@ export default function PracticePage() {
     }, 1000);
 
     return clearStageTimer;
-  }, [clearStageTimer, currentStage, currentTask, handleRecordTimeout, selectedTest]);
+  }, [activeQuestionIndex, clearStageTimer, currentStage, currentTask, handleRecordTimeout, recordTimerStarted, selectedTest]);
 
   const goToTask = useCallback((taskNumber) => {
     setCurrentTask(taskNumber);
     setCurrentStage(STAGES.PREP);
+    setRecordTimerStarted(false);
     if (taskNumber === 2) {
       setActiveQuestionIndex(0);
     }
@@ -528,6 +562,7 @@ export default function PracticePage() {
     }
 
     setCurrentStage(STAGES.PREP);
+    setRecordTimerStarted(false);
   }, [currentTask, replaceAnswerBlob, task2QuestionCount]);
 
   const handleMicToggle = useCallback(() => {
@@ -625,6 +660,7 @@ export default function PracticePage() {
     setCurrentTask(1);
     setCurrentStage(STAGES.PREP);
     setActiveQuestionIndex(0);
+    setRecordTimerStarted(false);
     setInfo("");
     setError("");
     setAiFeedback(null);
@@ -981,6 +1017,11 @@ export default function PracticePage() {
                       Прочитайте текст вслух. Старайтесь говорить ровно и внятно.
                     </p>
                     <p className="exam-text-passage">{selectedTest.tasks.task1.readingText}</p>
+                    <ReferenceBox
+                      title="Эталон задания 1"
+                      text={selectedTest.tasks.task1.referenceText || selectedTest.tasks.task1.readingText || ""}
+                      audioUrl={resolveMediaUrl(backendUrl, selectedTest.tasks.task1.referenceAudioUrl)}
+                    />
                   </>
                 )}
 
@@ -1025,6 +1066,11 @@ export default function PracticePage() {
                             className="mt-3"
                           />
                         )}
+                        <ReferenceBox
+                          title={`Эталон вопроса ${activeQuestionIndex + 1}`}
+                          text={currentQuestion.referenceText || ""}
+                          audioUrl={resolveMediaUrl(backendUrl, currentQuestion.referenceAudioUrl)}
+                        />
                         {task2Answers[activeQuestionIndex]?.url && (
                           <audio
                             controls
@@ -1048,8 +1094,21 @@ export default function PracticePage() {
                         <li key={`${item}-${index}`}>{item}</li>
                       ))}
                     </ul>
+                    <ReferenceBox
+                      title="Эталон задания 3"
+                      text={selectedTest.tasks.task3.referenceText || ""}
+                      audioUrl={resolveMediaUrl(backendUrl, selectedTest.tasks.task3.referenceAudioUrl)}
+                    />
                   </>
                 )}
+
+                <div className="exam-ai-note">
+                  <p className="question-card-label">Как AI оценивает ответ</p>
+                  <p className="exam-subtle">
+                    После записи система делает расшифровку речи и сравнивает ваш ответ с заданием и эталоном
+                    (смысл, грамматика, точность). Итоговый балл по каждому заданию: от 0 до 5.
+                  </p>
+                </div>
 
                 {(currentStage === STAGES.PREP || currentStage === STAGES.RECORD) && (
                   <div className="exam-timer-block">
@@ -1057,6 +1116,9 @@ export default function PracticePage() {
                     <p className="exam-timer-label">
                       {currentStage === STAGES.PREP ? "Время на подготовку" : "Время на ответ"}
                     </p>
+                    {currentStage === STAGES.RECORD && !recordTimerStarted && (
+                      <p className="exam-subtle mt-1">Отсчет начнется после нажатия на микрофон.</p>
+                    )}
                   </div>
                 )}
 
@@ -1148,7 +1210,14 @@ export default function PracticePage() {
                       >
                         Назад
                       </button>
-                      <button type="button" onClick={() => setCurrentStage(STAGES.RECORD)} className="btn btn-primary text-sm">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRecordTimerStarted(false);
+                          setCurrentStage(STAGES.RECORD);
+                        }}
+                        className="btn btn-primary text-sm"
+                      >
                         Перейти к записи
                       </button>
                     </>

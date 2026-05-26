@@ -111,19 +111,17 @@ function sanitizeTestForClient(
     return clone;
   }
 
-  clone.tasks.task1.referenceText = "";
-  clone.tasks.task1.referenceAudioUrl = mapMediaUrl("");
+  clone.tasks.task1.referenceAudioUrl = mapMediaUrl(clone.tasks.task1.referenceAudioUrl);
   clone.tasks.task2.introAudioUrl = mapMediaUrl(clone.tasks.task2.introAudioUrl);
   clone.tasks.task2.outroAudioUrl = mapMediaUrl(clone.tasks.task2.outroAudioUrl);
   clone.tasks.task2.questions = clone.tasks.task2.questions.map((question) => ({
     id: question.id,
     text: question.text,
     audioUrl: mapMediaUrl(question.audioUrl),
-    referenceText: "",
-    referenceAudioUrl: mapMediaUrl(""),
+    referenceText: question.referenceText,
+    referenceAudioUrl: mapMediaUrl(question.referenceAudioUrl),
   }));
-  clone.tasks.task3.referenceText = "";
-  clone.tasks.task3.referenceAudioUrl = mapMediaUrl("");
+  clone.tasks.task3.referenceAudioUrl = mapMediaUrl(clone.tasks.task3.referenceAudioUrl);
 
   return clone;
 }

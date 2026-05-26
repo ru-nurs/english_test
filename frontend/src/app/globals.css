@@ -409,6 +409,39 @@ audio {
   font-size: 0.93rem;
 }
 
+.exam-reference-box {
+  margin-top: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.82rem;
+  background: rgb(246 250 255 / 0.88);
+  padding: 0.82rem 0.9rem;
+}
+
+.exam-reference-text {
+  margin-top: 0.34rem;
+  color: var(--foreground);
+  line-height: 1.55;
+}
+
+.exam-reference-audio-wrap {
+  margin-top: 0.58rem;
+}
+
+.exam-reference-audio-label {
+  display: inline-block;
+  margin-bottom: 0.3rem;
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+}
+
+.exam-ai-note {
+  margin-top: 0.85rem;
+  border-left: 3px solid rgb(76 122 190 / 0.55);
+  padding: 0.56rem 0 0.56rem 0.7rem;
+  background: rgb(244 249 255 / 0.72);
+  border-radius: 0.6rem;
+}
+
 .exam-timer-block {
   margin: 1rem 0 0.4rem;
   text-align: center;
