@@ -1157,7 +1157,7 @@ export default function AdminPage() {
                     value={voice}
                     onChange={(event) => setVoice(event.target.value)}
                     className="field mt-1"
-                    placeholder="austin"
+                    placeholder="Kore или austin"
                   />
                 </label>
               </div>
@@ -1530,7 +1530,7 @@ export default function AdminPage() {
                     value={voice}
                     onChange={(event) => setVoice(event.target.value)}
                     className="field mt-3"
-                    placeholder="Голос (austin)"
+                    placeholder="Голос (Kore или austin)"
                   />
                   <textarea
                     value={ttsText}

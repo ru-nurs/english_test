@@ -82,7 +82,7 @@ const config = {
   GEMINI_ANALYZE_MODEL: String(process.env.GEMINI_ANALYZE_MODEL || "gemini-2.5-flash").trim(),
   GEMINI_TRANSCRIBE_MODEL: String(process.env.GEMINI_TRANSCRIBE_MODEL || "gemini-2.5-flash").trim(),
   GEMINI_GENERATE_MODEL: String(process.env.GEMINI_GENERATE_MODEL || "gemini-2.5-flash").trim(),
-  TTS_PROVIDER: String(process.env.TTS_PROVIDER || process.env.AI_PROVIDER || "groq").trim().toLowerCase(),
+  TTS_PROVIDER: String(process.env.TTS_PROVIDER || "hybrid").trim().toLowerCase(),
   GEMINI_TTS_MODEL: String(process.env.GEMINI_TTS_MODEL || "gemini-2.5-flash-preview-tts").trim(),
   GEMINI_TTS_VOICE: String(process.env.GEMINI_TTS_VOICE || "Kore").trim(),
   TTS_MODEL: String(process.env.TTS_MODEL || "canopylabs/orpheus-v1-english").trim(),

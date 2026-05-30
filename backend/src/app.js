@@ -60,6 +60,14 @@ function getAiProvider() {
   return trimText(config.AI_PROVIDER).toLowerCase() === "gemini" ? "gemini" : "groq";
 }
 
+function normalizeTtsProvider(value) {
+  const provider = trimText(value).toLowerCase();
+  if (provider === "gemini" || provider === "groq" || provider === "hybrid" || provider === "auto") {
+    return provider;
+  }
+  return "groq";
+}
+
 function getAiTextConfig(kind) {
   const provider = getAiProvider();
   if (provider === "gemini") {
@@ -83,8 +91,7 @@ function getAiTextConfig(kind) {
   };
 }
 
-function getTtsConfig() {
-  const provider = trimText(config.TTS_PROVIDER).toLowerCase() === "gemini" ? "gemini" : "groq";
+function makeTtsConfig(provider) {
   if (provider === "gemini") {
     return {
       provider,
@@ -101,6 +108,55 @@ function getTtsConfig() {
     model: config.TTS_MODEL,
     voice: config.TTS_VOICE,
   };
+}
+
+function hasTtsCredentials(ttsConfig) {
+  return Boolean(trimText(ttsConfig?.apiKey));
+}
+
+function getTtsConfigs({ preferIndex = 0 } = {}) {
+  const provider = normalizeTtsProvider(config.TTS_PROVIDER);
+  const providers =
+    provider === "hybrid" || provider === "auto" ? ["gemini", "groq"] : [provider];
+
+  if ((provider === "hybrid" || provider === "auto") && Math.abs(Number(preferIndex || 0)) % 2 === 1) {
+    providers.reverse();
+  }
+
+  const configs = providers.map(makeTtsConfig);
+  const configured = configs.filter(hasTtsCredentials);
+  return configured.length > 0 ? configured : configs;
+}
+
+function getTtsConfig() {
+  return getTtsConfigs()[0];
+}
+
+async function generateSpeechWithTtsFallback({ text, voice, preferIndex = 0 }) {
+  const ttsConfigs = getTtsConfigs({ preferIndex });
+  const errors = [];
+
+  for (const ttsConfig of ttsConfigs) {
+    try {
+      const generated = await generateSpeechWithGroq({
+        provider: ttsConfig.provider,
+        apiKey: ttsConfig.apiKey,
+        model: ttsConfig.model,
+        voice: voice || ttsConfig.voice,
+        baseUrl: ttsConfig.baseUrl,
+        text,
+      });
+      return {
+        ...generated,
+        provider: ttsConfig.provider,
+        voice: voice || ttsConfig.voice,
+      };
+    } catch (error) {
+      errors.push(`${ttsConfig.provider}: ${error.message || "Audio generation failed"}`);
+    }
+  }
+
+  throw new Error(errors.join(" | ") || "Audio generation failed");
 }
 
 function normalizeDisplayName(value, { fallback = "" } = {}) {
@@ -259,7 +315,9 @@ function isRateLimitError(errorMessage) {
   return (
     normalized.includes("rate limit") ||
     normalized.includes("error 429") ||
-    normalized.includes("status code 429")
+    normalized.includes("returned 429") ||
+    normalized.includes("status code 429") ||
+    normalized.includes("quota exceeded")
   );
 }
 
@@ -627,20 +685,17 @@ async function generateAudioAssetsForTest({ test, overwrite = false, voice }) {
   const generatedItems = [];
   const failedItems = [];
 
-  for (const target of targets) {
+  for (let targetIndex = 0; targetIndex < targets.length; targetIndex += 1) {
+    const target = targets[targetIndex];
     try {
-      const ttsConfig = getTtsConfig();
-      const generated = await generateSpeechWithGroq({
-        provider: ttsConfig.provider,
-        apiKey: ttsConfig.apiKey,
-        model: ttsConfig.model,
-        voice: voice || ttsConfig.voice,
-        baseUrl: ttsConfig.baseUrl,
+      const generated = await generateSpeechWithTtsFallback({
         text: target.text,
+        voice,
+        preferIndex: targetIndex,
       });
 
       const fileName = makeTtsFileName({
-        base: `${updatedTest.id}-${target.label}-${voice}`,
+        base: `${updatedTest.id}-${target.label}-${generated.provider}-${generated.voice}`,
         extension: generated.extension,
       });
       const outputPath = path.join(config.UPLOADS_DIR, fileName);
@@ -1594,17 +1649,13 @@ async function createApp() {
     }
 
     try {
-      const generated = await generateSpeechWithGroq({
-        provider: ttsConfig.provider,
-        apiKey: ttsConfig.apiKey,
-        model: ttsConfig.model,
-        voice,
-        baseUrl: ttsConfig.baseUrl,
+      const generated = await generateSpeechWithTtsFallback({
         text,
+        voice,
       });
 
       const fileName = makeTtsFileName({
-        base: `${targetLabel}-${voice}`,
+        base: `${targetLabel}-${generated.provider}-${generated.voice}`,
         extension: generated.extension,
       });
       const outputPath = path.join(config.UPLOADS_DIR, fileName);

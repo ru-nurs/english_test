@@ -126,6 +126,39 @@ function parseGeminiHttpError(error, { scope = "Gemini request" } = {}) {
   return providerMessage;
 }
 
+function parseRetryDelayMs(error, fallbackMs = 9000) {
+  const retryAfter = Number(error?.response?.headers?.["retry-after"]);
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.ceil(retryAfter * 1000) + 750;
+  }
+
+  const message =
+    error?.response?.data?.error?.message ||
+    error?.response?.data?.message ||
+    error?.message ||
+    "";
+  const match = String(message).match(/retry\s+in\s+([0-9.]+)s/i);
+  if (match) {
+    const seconds = Number(match[1]);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.ceil(seconds * 1000) + 750;
+    }
+  }
+
+  return fallbackMs;
+}
+
+function isRetryableGeminiError(error) {
+  const statusCode = Number(error?.response?.status || 0);
+  return statusCode === 429 || statusCode === 500 || statusCode === 502 || statusCode === 503 || statusCode === 504;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function normalizeGeminiResponseText(responseData) {
   const parts = responseData?.candidates?.[0]?.content?.parts;
   if (!Array.isArray(parts)) {
@@ -219,60 +252,68 @@ async function requestGeminiAudio({
   text,
   voice,
   timeout = 90000,
+  maxAttempts = 5,
 }) {
   const token = trimText(apiKey);
   if (!token) {
     throw new Error("TTS generation is disabled: GEMINI_API_KEY is missing.");
   }
 
-  try {
-    const response = await axios.post(
-      `${trimText(baseUrl || GEMINI_BASE_URL).replace(/\/+$/, "")}/models/${normalizeGeminiModelName(
-        model
-      )}:generateContent`,
-      {
-        contents: [{ role: "user", parts: [{ text }] }],
-        generationConfig: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: trimText(voice) || "Kore",
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await axios.post(
+        `${trimText(baseUrl || GEMINI_BASE_URL).replace(/\/+$/, "")}/models/${normalizeGeminiModelName(
+          model
+        )}:generateContent`,
+        {
+          contents: [{ role: "user", parts: [{ text }] }],
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: trimText(voice) || "Kore",
+                },
               },
             },
           },
         },
-      },
-      {
-        headers: {
-          "x-goog-api-key": token,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        timeout,
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity,
+        {
+          headers: {
+            "x-goog-api-key": token,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          timeout,
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+        }
+      );
+
+      const inlinePart = response.data?.candidates?.[0]?.content?.parts?.find(
+        (part) => part?.inlineData || part?.inline_data
+      );
+      const inlineData = inlinePart?.inlineData || inlinePart?.inline_data;
+      const rawAudio = inlineData?.data;
+      if (!rawAudio) {
+        throw new Error("Gemini TTS returned no audio data.");
       }
-    );
 
-    const inlineData =
-      response.data?.candidates?.[0]?.content?.parts?.find((part) => part?.inlineData || part?.inline_data)
-        ?.inlineData ||
-      response.data?.candidates?.[0]?.content?.parts?.find((part) => part?.inlineData || part?.inline_data)
-        ?.inline_data;
-    const rawAudio = inlineData?.data;
-    if (!rawAudio) {
-      throw new Error("Gemini TTS returned no audio data.");
+      const audioBuffer = Buffer.from(rawAudio, "base64");
+      if (!audioBuffer.length) {
+        throw new Error("Gemini TTS returned an empty audio file.");
+      }
+      return audioBuffer;
+    } catch (error) {
+      if (attempt < maxAttempts && isRetryableGeminiError(error)) {
+        await wait(parseRetryDelayMs(error, 9000 * attempt));
+        continue;
+      }
+      throw new Error(parseGeminiHttpError(error, { scope: "Gemini TTS" }));
     }
-
-    const audioBuffer = Buffer.from(rawAudio, "base64");
-    if (!audioBuffer.length) {
-      throw new Error("Gemini TTS returned an empty audio file.");
-    }
-    return audioBuffer;
-  } catch (error) {
-    throw new Error(parseGeminiHttpError(error, { scope: "Gemini TTS" }));
   }
+
+  throw new Error("Gemini TTS failed after retries.");
 }
 
 function normalizeAnalyzeResult(value) {
@@ -592,6 +633,37 @@ const ORPHEUS_MODEL_ENGLISH = "canopylabs/orpheus-v1-english";
 const ORPHEUS_MODEL_ARABIC = "canopylabs/orpheus-arabic-saudi";
 const ORPHEUS_DEFAULT_VOICE = "austin";
 const ORPHEUS_MAX_INPUT_CHARS = 200;
+const GEMINI_PREBUILT_VOICES = new Set([
+  "achernar",
+  "achird",
+  "algenib",
+  "algieba",
+  "alnilam",
+  "aoede",
+  "autonoe",
+  "callirrhoe",
+  "charon",
+  "despina",
+  "enceladus",
+  "erinome",
+  "fenrir",
+  "gacrux",
+  "iapetus",
+  "kore",
+  "laomedeia",
+  "leda",
+  "orus",
+  "puck",
+  "pulcherrima",
+  "rasalgethi",
+  "sadachbia",
+  "sadaltager",
+  "schedar",
+  "sulafat",
+  "umbriel",
+  "vindemiatrix",
+  "zubenelgenubi",
+]);
 
 function isOrpheusModel(modelId) {
   const normalized = String(modelId || "")
@@ -635,7 +707,8 @@ function normalizeVoiceForModel(modelId, voice) {
     return cleanedVoice || "alloy";
   }
 
-  if (!cleanedVoice || cleanedVoice.toLowerCase().includes("playai")) {
+  const lowered = cleanedVoice.toLowerCase();
+  if (!cleanedVoice || lowered.includes("playai") || GEMINI_PREBUILT_VOICES.has(lowered)) {
     return ORPHEUS_DEFAULT_VOICE;
   }
 

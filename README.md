@@ -6,7 +6,7 @@ Web trainer for the English speaking part of OGE/EGE-style exams. The app lets s
 
 - Frontend: Next.js 16, React 19, Tailwind CSS
 - Backend: Express, PostgreSQL/Supabase or local storage, cookie auth
-- AI: Groq by default, optional Google Gemini for STT/evaluation/variant generation
+- AI: Groq by default, optional Google Gemini for STT/evaluation/variant generation/TTS
 - Payments: YooKassa
 - Media: local or mounted storage for uploaded/generated audio
 
@@ -69,7 +69,7 @@ FRONTEND_ORIGIN=http://localhost:3000
 SUPABASE_DB_URL=postgresql://...
 
 AI_PROVIDER=gemini
-TTS_PROVIDER=gemini
+TTS_PROVIDER=hybrid
 GEMINI_API_KEY=your_gemini_api_key
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_GENERATE_MODEL=gemini-2.5-flash
@@ -77,8 +77,10 @@ GEMINI_ANALYZE_MODEL=gemini-2.5-flash
 GEMINI_TRANSCRIBE_MODEL=gemini-2.5-flash
 GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
 GEMINI_TTS_VOICE=Kore
-TTS_MODEL=gemini-2.5-flash-preview-tts
-TTS_VOICE=Kore
+GROQ_API_KEY=your_groq_api_key
+GROQ_TTS_API_KEY=your_groq_tts_api_key_optional
+TTS_MODEL=canopylabs/orpheus-v1-english
+TTS_VOICE=austin
 
 ADMIN_BOOTSTRAP_ENABLED=true
 ADMIN_BOOTSTRAP_KEY=replace_with_long_random_string_at_least_24_chars
@@ -88,13 +90,13 @@ EVALUATION_TOKEN_SECRET=replace_with_long_random_secret
 
 Use `backend/.env.example` for the full list, including storage and YooKassa settings.
 
-## Gemini Mode
+## AI And TTS Mode
 
-Use these variables to run STT, AI evaluation, AI variant generation, and TTS through Gemini:
+Use these variables to run STT, AI evaluation, and AI variant generation through Gemini, while TTS is shared between Gemini and Groq:
 
 ```env
 AI_PROVIDER=gemini
-TTS_PROVIDER=gemini
+TTS_PROVIDER=hybrid
 GEMINI_API_KEY=your_gemini_api_key
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_GENERATE_MODEL=gemini-2.5-flash
@@ -102,11 +104,13 @@ GEMINI_ANALYZE_MODEL=gemini-2.5-flash
 GEMINI_TRANSCRIBE_MODEL=gemini-2.5-flash
 GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
 GEMINI_TTS_VOICE=Kore
-TTS_MODEL=gemini-2.5-flash-preview-tts
-TTS_VOICE=Kore
+GROQ_API_KEY=your_groq_api_key
+GROQ_TTS_API_KEY=your_groq_tts_api_key_optional
+TTS_MODEL=canopylabs/orpheus-v1-english
+TTS_VOICE=austin
 ```
 
-Groq remains available as a fallback when `AI_PROVIDER=groq` and `TTS_PROVIDER=groq`.
+`TTS_PROVIDER=hybrid` alternates Gemini and Groq during bulk audio generation. If one provider returns a quota/rate-limit/provider error, the backend retries with the other provider. Use `TTS_PROVIDER=gemini` or `TTS_PROVIDER=groq` only when you want a single TTS provider.
 
 ## Core Features
 
