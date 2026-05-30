@@ -3,6 +3,21 @@ const fs = require("fs");
 const FormData = require("form-data");
 const { toNumberInRange } = require("./utils");
 
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash";
+
+function trimText(value) {
+  return String(value || "").trim();
+}
+
+function normalizeProvider(value) {
+  return trimText(value).toLowerCase() === "gemini" ? "gemini" : "groq";
+}
+
+function normalizeGeminiModelName(value) {
+  return (trimText(value) || GEMINI_DEFAULT_MODEL).replace(/^models\//i, "");
+}
+
 function extractJsonFromModelResponse(rawText) {
   if (typeof rawText !== "string") {
     return null;
@@ -94,6 +109,35 @@ function toShortErrorMessage(error, fallback) {
   return String(providerMessage || fallback || "Request failed.");
 }
 
+function parseGeminiHttpError(error, { scope = "Gemini request" } = {}) {
+  const statusCode = error?.response?.status;
+  const fallbackMessage = String(error?.message || `${scope} failed.`);
+  const data = error?.response?.data;
+  const providerMessage =
+    data?.error?.message ||
+    data?.message ||
+    (typeof data === "string" ? data.trim() : "") ||
+    fallbackMessage;
+
+  if (statusCode) {
+    return `${scope} failed: Gemini returned ${statusCode}${providerMessage ? ` - ${providerMessage}` : ""}`;
+  }
+
+  return providerMessage;
+}
+
+function normalizeGeminiResponseText(responseData) {
+  const parts = responseData?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) {
+    return "";
+  }
+  return parts
+    .map((part) => String(part?.text || "").trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
 async function requestGroqText({ apiKey, model, input, temperature = 0.2, scope = "Groq text request" }) {
   const token = String(apiKey || "").trim();
   if (!token) {
@@ -126,6 +170,46 @@ async function requestGroqText({ apiKey, model, input, temperature = 0.2, scope 
     throw new Error(`${scope} failed: empty response text.`);
   }
   return text;
+}
+
+async function requestGeminiContent({
+  apiKey,
+  model,
+  baseUrl = GEMINI_BASE_URL,
+  payload,
+  timeout = 90000,
+  scope = "Gemini request",
+}) {
+  const token = trimText(apiKey);
+  if (!token) {
+    throw new Error(`${scope} failed: GEMINI_API_KEY is missing.`);
+  }
+
+  try {
+    const response = await axios.post(
+      `${trimText(baseUrl || GEMINI_BASE_URL).replace(/\/+$/, "")}/models/${normalizeGeminiModelName(
+        model
+      )}:generateContent`,
+      payload,
+      {
+        headers: {
+          "x-goog-api-key": token,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        timeout,
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      }
+    );
+    const text = normalizeGeminiResponseText(response.data);
+    if (!text) {
+      throw new Error(`${scope} failed: empty response text.`);
+    }
+    return text;
+  } catch (error) {
+    throw new Error(parseGeminiHttpError(error, { scope }));
+  }
 }
 
 function normalizeAnalyzeResult(value) {
@@ -162,15 +246,13 @@ function normalizeAnalyzeResult(value) {
   };
 }
 
-async function evaluateWithGroq({ apiKey, model, taskType, promptContext, referenceText, userText }) {
-  if (!apiKey) {
-    throw new Error("AI evaluation is disabled: GROQ_API_KEY is missing.");
-  }
-
-  const prompt = `You are an English speaking exam evaluator for Russian OGE/EGE-like tasks.
+function buildEvaluationPrompt({ taskType, promptContext, referenceText, userText }) {
+  return `You are an English speaking exam evaluator for Russian OGE/EGE-like tasks.
 Evaluate the student answer with emphasis on:
 1) content relevance and meaning (semantic match can pass even if wording differs)
 2) grammar quality
+3) pronunciation/transcription issues that may affect clarity
+4) practical next steps for improving this exact answer
 
 Task type: ${taskType}
 Task context: ${promptContext || "N/A"}
@@ -184,10 +266,57 @@ Return strict JSON only in this exact format:
   "score": 0-5,
   "content_score": 0-5,
   "grammar_score": 0-5,
-  "errors": ["short bullet", "..."],
-  "recommendations": ["actionable advice", "..."],
-  "improved_answer": "one improved student answer"
-}`;
+  "errors": ["short error description in Russian, English examples in quotes when needed", "..."],
+  "recommendations": ["specific recommendation in Russian, English examples in quotes when needed", "..."],
+  "improved_answer": "one improved student answer in English"
+}
+
+Important:
+- errors and recommendations must be in Russian.
+- English examples, corrected phrases and improved_answer must stay in English.
+- Give a deeper but concise analysis: mention missing content, grammar patterns, word choice, and fluency where relevant.`;
+}
+
+async function evaluateWithGroq({
+  apiKey,
+  model,
+  taskType,
+  promptContext,
+  referenceText,
+  userText,
+  provider,
+  baseUrl,
+}) {
+  if (!apiKey) {
+    throw new Error(
+      normalizeProvider(provider) === "gemini"
+        ? "AI evaluation is disabled: GEMINI_API_KEY is missing."
+        : "AI evaluation is disabled: GROQ_API_KEY is missing."
+    );
+  }
+
+  const prompt = buildEvaluationPrompt({ taskType, promptContext, referenceText, userText });
+
+  if (normalizeProvider(provider) === "gemini") {
+    const modelContent = await requestGeminiContent({
+      apiKey,
+      model,
+      baseUrl,
+      payload: {
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: "application/json",
+        },
+      },
+      scope: "AI evaluation",
+    });
+    const parsed = extractJsonFromModelResponse(modelContent);
+    if (!parsed) {
+      throw new Error("AI model returned invalid JSON.");
+    }
+    return normalizeAnalyzeResult(parsed);
+  }
 
   const modelContent = await requestGroqText({
     apiKey,
@@ -204,15 +333,56 @@ Return strict JSON only in this exact format:
   return normalizeAnalyzeResult(parsed);
 }
 
-async function transcribeWithGroq({ apiKey, file }) {
+async function transcribeWithGroq({ apiKey, file, provider, model, baseUrl }) {
   if (!apiKey) {
-    throw new Error("Transcription is disabled: GROQ_API_KEY is missing.");
+    throw new Error(
+      normalizeProvider(provider) === "gemini"
+        ? "Transcription is disabled: GEMINI_API_KEY is missing."
+        : "Transcription is disabled: GROQ_API_KEY is missing."
+    );
   }
 
   const hasBuffer = Buffer.isBuffer(file?.buffer);
   const hasPath = Boolean(file?.path);
   if (!hasBuffer && !hasPath) {
     throw new Error("Audio file is missing.");
+  }
+
+  if (normalizeProvider(provider) === "gemini") {
+    const audioBuffer = hasBuffer ? file.buffer : await fs.promises.readFile(file.path);
+    if (!audioBuffer.length) {
+      throw new Error("Audio file is empty.");
+    }
+
+    return requestGeminiContent({
+      apiKey,
+      model,
+      baseUrl,
+      payload: {
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text:
+                  "Transcribe this English speech audio exactly in plain text. Return only the transcription without comments, labels, markdown or explanation.",
+              },
+              {
+                inline_data: {
+                  mime_type: file.mimetype || "audio/webm",
+                  data: audioBuffer.toString("base64"),
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.1,
+        },
+      },
+      timeout: 120000,
+      scope: "Transcription",
+    });
   }
 
   const formData = new FormData();
@@ -255,9 +425,13 @@ async function transcribeWithGroq({ apiKey, file }) {
   return text;
 }
 
-async function generateTestWithAi({ apiKey, model, seedTest }) {
+async function generateTestWithAi({ apiKey, model, seedTest, provider, baseUrl }) {
   if (!apiKey) {
-    throw new Error("AI generation is disabled: GROQ_API_KEY is missing.");
+    throw new Error(
+      normalizeProvider(provider) === "gemini"
+        ? "AI generation is disabled: GEMINI_API_KEY is missing."
+        : "AI generation is disabled: GROQ_API_KEY is missing."
+    );
   }
 
   const seedSummary = {
@@ -312,6 +486,28 @@ Return strict JSON only:
     }
   }
 }`;
+
+  if (normalizeProvider(provider) === "gemini") {
+    const modelContent = await requestGeminiContent({
+      apiKey,
+      model,
+      baseUrl,
+      payload: {
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.8,
+          responseMimeType: "application/json",
+        },
+      },
+      scope: "AI variant generation",
+    });
+    const parsed = extractJsonFromModelResponse(modelContent);
+    if (!parsed) {
+      throw new Error("AI test generator returned invalid JSON");
+    }
+
+    return parsed;
+  }
 
   const modelContent = await requestGroqText({
     apiKey,

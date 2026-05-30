@@ -56,6 +56,33 @@ function trimText(value) {
   return String(value || "").trim();
 }
 
+function getAiProvider() {
+  return trimText(config.AI_PROVIDER).toLowerCase() === "gemini" ? "gemini" : "groq";
+}
+
+function getAiTextConfig(kind) {
+  const provider = getAiProvider();
+  if (provider === "gemini") {
+    const modelByKind = {
+      analyze: config.GEMINI_ANALYZE_MODEL,
+      transcribe: config.GEMINI_TRANSCRIBE_MODEL,
+      generate: config.GEMINI_GENERATE_MODEL,
+    };
+    return {
+      provider,
+      apiKey: config.GEMINI_API_KEY,
+      baseUrl: config.GEMINI_BASE_URL,
+      model: modelByKind[kind] || config.GEMINI_ANALYZE_MODEL,
+    };
+  }
+
+  return {
+    provider,
+    apiKey: config.GROQ_API_KEY,
+    model: kind === "generate" ? config.GENERATE_MODEL : config.ANALYZE_MODEL,
+  };
+}
+
 function normalizeDisplayName(value, { fallback = "" } = {}) {
   const cleaned = trimText(value).replace(/\s+/g, " ").slice(0, 40);
   return cleaned || fallback;
@@ -1147,8 +1174,12 @@ async function createApp() {
     async (req, res) => {
       try {
         await validateAudioUpload(req.file, { maxBytes: 12 * 1024 * 1024 });
+        const aiConfig = getAiTextConfig("transcribe");
         const text = await transcribeWithGroq({
-          apiKey: config.GROQ_API_KEY,
+          provider: aiConfig.provider,
+          apiKey: aiConfig.apiKey,
+          model: aiConfig.model,
+          baseUrl: aiConfig.baseUrl,
           file: req.file,
         });
 
@@ -1175,9 +1206,12 @@ async function createApp() {
     }
 
     try {
+      const aiConfig = getAiTextConfig("analyze");
       const result = await evaluateWithGroq({
-        apiKey: config.GROQ_API_KEY,
-        model: config.ANALYZE_MODEL,
+        provider: aiConfig.provider,
+        apiKey: aiConfig.apiKey,
+        model: aiConfig.model,
+        baseUrl: aiConfig.baseUrl,
         taskType,
         promptContext,
         referenceText,
@@ -1436,9 +1470,12 @@ async function createApp() {
     try {
       const tests = await repositories.listTests();
       const seedTest = tests.find((item) => item.id === "case-1") || tests[0];
+      const aiConfig = getAiTextConfig("generate");
       const generatedPayload = await generateTestWithAi({
-        apiKey: config.GROQ_API_KEY,
-        model: config.GENERATE_MODEL,
+        provider: aiConfig.provider,
+        apiKey: aiConfig.apiKey,
+        model: aiConfig.model,
+        baseUrl: aiConfig.baseUrl,
         seedTest,
       });
       const normalized = normalizeTestPayload(
@@ -1470,9 +1507,12 @@ async function createApp() {
         tests.find((item) => item.id === "case-1") ||
         tests[0];
 
+      const aiConfig = getAiTextConfig("generate");
       const generatedPayload = await generateTestWithAi({
-        apiKey: config.GROQ_API_KEY,
-        model: config.GENERATE_MODEL,
+        provider: aiConfig.provider,
+        apiKey: aiConfig.apiKey,
+        model: aiConfig.model,
+        baseUrl: aiConfig.baseUrl,
         seedTest,
       });
 

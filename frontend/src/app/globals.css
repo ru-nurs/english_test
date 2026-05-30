@@ -376,6 +376,113 @@ audio {
   margin-bottom: 0.9rem;
 }
 
+.practice-mode-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.practice-mode-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: rgb(255 255 255 / 0.72);
+  padding: 0.35rem;
+  justify-self: center;
+}
+
+.practice-mode-tabs button {
+  border: 0;
+  border-radius: 0.65rem;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 700;
+  padding: 0.58rem 0.82rem;
+}
+
+.practice-mode-tabs button.active {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.task-training-tools {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.task-choice-grid {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.task-choice-card {
+  border: 1px solid var(--border);
+  border-radius: 0.82rem;
+  background: white;
+  color: var(--foreground);
+  cursor: pointer;
+  min-height: 82px;
+  padding: 0.72rem;
+  text-align: left;
+}
+
+.task-choice-card strong,
+.task-choice-card span {
+  display: block;
+}
+
+.task-choice-card span {
+  margin-top: 0.18rem;
+  color: var(--muted-foreground);
+  font-size: 0.8rem;
+}
+
+.task-choice-card.active {
+  border-color: var(--primary);
+  background: rgb(226 236 251 / 0.72);
+}
+
+.task-variant-picker {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.task-number-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(2.55rem, 1fr));
+  gap: 0.45rem;
+  max-height: 11rem;
+  overflow: auto;
+  padding: 0.3rem;
+}
+
+.task-number-button {
+  border: 1px solid var(--border);
+  border-radius: 0.72rem;
+  background: white;
+  color: var(--secondary-foreground);
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 2.45rem;
+}
+
+.task-number-button:hover {
+  border-color: var(--ring);
+  background: rgb(240 246 255 / 0.9);
+}
+
+.task-number-button.active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
 .exam-subtle {
   color: var(--muted-foreground);
   font-size: 0.9rem;
@@ -407,39 +514,6 @@ audio {
   flex-direction: column;
   gap: 0.35rem;
   font-size: 0.93rem;
-}
-
-.exam-reference-box {
-  margin-top: 0.8rem;
-  border: 1px solid var(--border);
-  border-radius: 0.82rem;
-  background: rgb(246 250 255 / 0.88);
-  padding: 0.82rem 0.9rem;
-}
-
-.exam-reference-text {
-  margin-top: 0.34rem;
-  color: var(--foreground);
-  line-height: 1.55;
-}
-
-.exam-reference-audio-wrap {
-  margin-top: 0.58rem;
-}
-
-.exam-reference-audio-label {
-  display: inline-block;
-  margin-bottom: 0.3rem;
-  color: var(--muted-foreground);
-  font-size: 0.82rem;
-}
-
-.exam-ai-note {
-  margin-top: 0.85rem;
-  border-left: 3px solid rgb(76 122 190 / 0.55);
-  padding: 0.56rem 0 0.56rem 0.7rem;
-  background: rgb(244 249 255 / 0.72);
-  border-radius: 0.6rem;
 }
 
 .exam-timer-block {
@@ -626,6 +700,89 @@ audio {
   color: var(--foreground);
 }
 
+.reference-panel {
+  margin-top: 0.72rem;
+  border: 1px solid var(--border);
+  border-radius: 0.78rem;
+  background: rgb(246 250 255 / 0.78);
+  overflow: hidden;
+}
+
+.reference-audio-body {
+  padding: 0.68rem 0.75rem;
+}
+
+.reference-panel summary {
+  cursor: pointer;
+  border-top: 1px solid var(--border);
+  color: var(--secondary-foreground);
+  font-size: 0.86rem;
+  font-weight: 700;
+  list-style-position: inside;
+  padding: 0.66rem 0.75rem;
+}
+
+.reference-panel-body {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.75rem;
+}
+
+.reference-audio-row {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: minmax(100px, 150px) minmax(0, 1fr);
+  align-items: center;
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+}
+
+.reference-audio-row audio {
+  width: 100%;
+}
+
+.reference-audio-row em {
+  color: var(--warning);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.reference-text {
+  color: var(--foreground);
+  font-size: 0.92rem;
+  line-height: 1.62;
+}
+
+.reference-inline {
+  color: var(--foreground);
+}
+
+.ai-feedback-box {
+  margin-top: 0.78rem;
+  border: 1px solid rgb(190 211 240 / 0.95);
+  border-radius: 0.78rem;
+  background: rgb(240 246 255 / 0.82);
+  padding: 0.76rem;
+}
+
+.ai-score-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.9rem;
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+}
+
+.ai-feedback-list {
+  margin: 0.62rem 0 0;
+  padding-left: 1.05rem;
+  color: var(--foreground);
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+}
+
 .exam-nav {
   margin-top: 1.2rem;
   display: flex;
@@ -759,6 +916,12 @@ audio {
 
   .training-stage-pill {
     font-size: 0.71rem;
+  }
+
+  .task-choice-grid,
+  .task-variant-picker,
+  .reference-audio-row {
+    grid-template-columns: 1fr;
   }
 
   .exam-nav {

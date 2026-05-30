@@ -70,10 +70,18 @@ const config = {
   PORT: toPositiveInt(process.env.PORT, 5000),
   ALLOWED_ORIGINS: parseOrigins(process.env.FRONTEND_ORIGIN),
   TRUST_PROXY: toBoolean(process.env.TRUST_PROXY, false),
+  AI_PROVIDER: String(process.env.AI_PROVIDER || "groq").trim().toLowerCase(),
   GROQ_API_KEY: String(process.env.GROQ_API_KEY || "").trim(),
   GROQ_TTS_API_KEY: String(process.env.GROQ_TTS_API_KEY || "").trim(),
   ANALYZE_MODEL: String(process.env.GROQ_ANALYZE_MODEL || "llama-3.3-70b-versatile").trim(),
   GENERATE_MODEL: String(process.env.GROQ_GENERATE_MODEL || "llama-3.3-70b-versatile").trim(),
+  GEMINI_API_KEY: String(process.env.GEMINI_API_KEY || "").trim(),
+  GEMINI_BASE_URL: String(
+    process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta"
+  ).trim(),
+  GEMINI_ANALYZE_MODEL: String(process.env.GEMINI_ANALYZE_MODEL || "gemini-2.5-flash").trim(),
+  GEMINI_TRANSCRIBE_MODEL: String(process.env.GEMINI_TRANSCRIBE_MODEL || "gemini-2.5-flash").trim(),
+  GEMINI_GENERATE_MODEL: String(process.env.GEMINI_GENERATE_MODEL || "gemini-2.5-flash").trim(),
   TTS_MODEL: String(process.env.TTS_MODEL || "canopylabs/orpheus-v1-english").trim(),
   TTS_VOICE: String(process.env.TTS_VOICE || "austin").trim(),
   ACCESS_COOKIE_NAME: process.env.ACCESS_COOKIE_NAME || "speakeasy_access",

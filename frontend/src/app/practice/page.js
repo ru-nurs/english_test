@@ -16,6 +16,17 @@ const STAGES = {
   FINAL_RESULT: "finalResult",
 };
 
+const PRACTICE_MODES = {
+  VARIANT: "variant",
+  TASK: "task",
+};
+
+const TASK_OPTIONS = [
+  { id: 1, title: "Задание 1", description: "Чтение текста вслух" },
+  { id: 2, title: "Задание 2", description: "Ответы на вопросы опроса" },
+  { id: 3, title: "Задание 3", description: "Монолог по теме" },
+];
+
 function createAnswerState() {
   return {
     blob: null,
@@ -162,22 +173,73 @@ function StageStepper({ currentStage }) {
   );
 }
 
-function ReferenceBox({ title = "Эталон", text, audioUrl }) {
+function AudioLine({ backendUrl, src, label = "Эталонное аудио" }) {
+  const audioSrc = resolveMediaUrl(backendUrl, src);
+
+  return (
+    <div className="reference-audio-row">
+      <span>{label}</span>
+      {audioSrc ? (
+        <audio controls src={audioSrc} />
+      ) : (
+        <em>аудио пока не добавлено</em>
+      )}
+    </div>
+  );
+}
+
+function ReferencePanel({ backendUrl, title = "Эталон", text, audioUrl }) {
   const hasText = Boolean(String(text || "").trim());
-  const hasAudio = Boolean(String(audioUrl || "").trim());
-  if (!hasText && !hasAudio) {
+
+  return (
+    <div className="reference-panel">
+      <div className="reference-audio-body">
+        <AudioLine backendUrl={backendUrl} src={audioUrl} />
+      </div>
+      <details>
+        <summary>{title}</summary>
+        <div className="reference-panel-body">
+        {hasText ? (
+          <p className="reference-text">{text}</p>
+        ) : (
+          <p className="exam-subtle">Эталонный текст пока не добавлен.</p>
+        )}
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function AiFeedbackBlock({ feedback, title = "AI-разбор" }) {
+  if (!feedback) {
     return null;
   }
 
   return (
-    <div className="exam-reference-box">
-      <p className="question-card-label">{title}</p>
-      {hasText && <p className="exam-reference-text">{text}</p>}
-      {hasAudio && (
-        <div className="exam-reference-audio-wrap">
-          <span className="exam-reference-audio-label">Прослушать эталон:</span>
-          <audio controls src={audioUrl} className="w-full" />
-        </div>
+    <div className="ai-feedback-box">
+      <p className="task2-result-title">
+        {title}: {roundOne(feedback.score || 0).toFixed(1)} / 5
+      </p>
+      <div className="ai-score-row">
+        <span>Содержание: {roundOne(feedback.contentScore || 0).toFixed(1)}</span>
+        <span>Грамматика: {roundOne(feedback.grammarScore || 0).toFixed(1)}</span>
+      </div>
+      {feedback.recommendations?.length > 0 ? (
+        <ul className="ai-feedback-list">
+          {feedback.recommendations.map((item, index) => (
+            <li key={`rec-${index}`}>{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="exam-subtle">Рекомендаций пока нет.</p>
+      )}
+      {feedback.errors?.length > 0 && (
+        <p className="exam-subtle mt-2">Ошибки: {feedback.errors.join("; ")}</p>
+      )}
+      {feedback.improvedAnswer && (
+        <p className="exam-subtle mt-2">
+          Пример лучше: <span className="reference-inline">{feedback.improvedAnswer}</span>
+        </p>
       )}
     </div>
   );
@@ -189,6 +251,8 @@ export default function PracticePage() {
   const [user, setUser] = useState(null);
   const [tests, setTests] = useState([]);
   const [selectedTestId, setSelectedTestId] = useState("");
+  const [practiceMode, setPracticeMode] = useState(PRACTICE_MODES.VARIANT);
+  const [selectedTaskNumber, setSelectedTaskNumber] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -197,12 +261,12 @@ export default function PracticePage() {
   const [aiProgress, setAiProgress] = useState("");
   const [aiFeedback, setAiFeedback] = useState(null);
   const [aiAutoAttempted, setAiAutoAttempted] = useState(false);
+  const [aiAutoTaskAttempts, setAiAutoTaskAttempts] = useState({});
 
   const [currentTask, setCurrentTask] = useState(1);
   const [currentStage, setCurrentStage] = useState(STAGES.PREP);
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(0);
-  const [recordTimerStarted, setRecordTimerStarted] = useState(false);
 
   const [task1Answer, setTask1Answer] = useState(createAnswerState());
   const [task2Answers, setTask2Answers] = useState([]);
@@ -222,6 +286,11 @@ export default function PracticePage() {
     () => tests.find((test) => test.id === selectedTestId) || null,
     [tests, selectedTestId]
   );
+  const selectedTestIndex = useMemo(
+    () => tests.findIndex((test) => test.id === selectedTestId),
+    [tests, selectedTestId]
+  );
+  const isTaskTrainingMode = practiceMode === PRACTICE_MODES.TASK;
 
   const task2Questions = selectedTest?.tasks?.task2?.questions || [];
   const task2QuestionCount = task2Questions.length;
@@ -230,6 +299,12 @@ export default function PracticePage() {
   const task1Completed = Boolean(task1Answer.blob);
   const task2AnsweredCount = task2Answers.filter((item) => item.blob).length;
   const task3Completed = Boolean(task3Answer.blob);
+  const hasCurrentTaskAnswer =
+    currentTask === 1
+      ? task1Completed
+      : currentTask === 2
+        ? task2AnsweredCount > 0
+        : task3Completed;
 
   const task1Score = task1Completed ? 5 : 0;
   const task2Score = task2QuestionCount > 0 ? roundOne((task2AnsweredCount / task2QuestionCount) * 5) : 0;
@@ -244,6 +319,7 @@ export default function PracticePage() {
     task3: task3Score,
   };
   const displayedOverallScore = aiFeedback?.overallScore ?? overallScore;
+  const currentTaskFeedback = aiFeedback?.[`task${currentTask}`] || null;
 
   const clearStageTimer = useCallback(() => {
     if (stageTimerRef.current) {
@@ -345,13 +421,11 @@ export default function PracticePage() {
         };
 
         recorder.start();
-        setRecordTimerStarted(true);
         recorderRef.current = recorder;
         setRecordingTarget(targetKey);
         recordingTargetRef.current = targetKey;
       } catch (startError) {
         stopStream();
-        setRecordTimerStarted(false);
         setRecordingTarget("");
         recordingTargetRef.current = "";
         setError("Не удалось получить доступ к микрофону. Разрешите доступ и повторите.");
@@ -431,35 +505,40 @@ export default function PracticePage() {
     stopStream();
 
     resetAllAnswers(selectedTest);
-    setCurrentTask(1);
+    setCurrentTask(isTaskTrainingMode ? selectedTaskNumber : 1);
     setCurrentStage(STAGES.PREP);
     setActiveQuestionIndex(0);
     setTimeLeft(0);
-    setRecordTimerStarted(false);
     setInfo("");
     setError("");
     setAiFeedback(null);
     setAiProgress("");
     setAiEvaluating(false);
     setAiAutoAttempted(false);
-  }, [clearStageTimer, resetAllAnswers, selectedTest, stopRecording, stopStream]);
+    setAiAutoTaskAttempts({});
+  }, [
+    clearStageTimer,
+    isTaskTrainingMode,
+    resetAllAnswers,
+    selectedTaskNumber,
+    selectedTest,
+    stopRecording,
+    stopStream,
+  ]);
 
   const completeRecordStage = useCallback(() => {
     if (currentTask === 1 || currentTask === 3) {
-      setRecordTimerStarted(false);
       setCurrentStage(STAGES.TASK_RESULT);
       return;
     }
 
     if (task2QuestionCount === 0) {
-      setRecordTimerStarted(false);
       setCurrentStage(STAGES.TASK_RESULT);
       return;
     }
 
     setActiveQuestionIndex((prev) => {
       const isLast = prev >= task2QuestionCount - 1;
-      setRecordTimerStarted(false);
       if (isLast) {
         setCurrentStage(STAGES.TASK_RESULT);
         return prev;
@@ -500,11 +579,6 @@ export default function PracticePage() {
           ? selectedTest.tasks.task2.maxAnswerSeconds
           : selectedTest.tasks.task3.maxRecordSeconds;
 
-    if (currentStage === STAGES.RECORD && !recordTimerStarted) {
-      setTimeLeft(Math.max(0, Number(recordSeconds) || 0));
-      return undefined;
-    }
-
     const initialSeconds = currentStage === STAGES.PREP ? prepSeconds : recordSeconds;
     let seconds = Math.max(0, Number(initialSeconds) || 0);
     setTimeLeft(seconds);
@@ -533,12 +607,11 @@ export default function PracticePage() {
     }, 1000);
 
     return clearStageTimer;
-  }, [activeQuestionIndex, clearStageTimer, currentStage, currentTask, handleRecordTimeout, recordTimerStarted, selectedTest]);
+  }, [clearStageTimer, currentStage, currentTask, handleRecordTimeout, selectedTest]);
 
   const goToTask = useCallback((taskNumber) => {
     setCurrentTask(taskNumber);
     setCurrentStage(STAGES.PREP);
-    setRecordTimerStarted(false);
     if (taskNumber === 2) {
       setActiveQuestionIndex(0);
     }
@@ -562,7 +635,6 @@ export default function PracticePage() {
     }
 
     setCurrentStage(STAGES.PREP);
-    setRecordTimerStarted(false);
   }, [currentTask, replaceAnswerBlob, task2QuestionCount]);
 
   const handleMicToggle = useCallback(() => {
@@ -614,6 +686,10 @@ export default function PracticePage() {
   ]);
 
   const handlePrepBack = () => {
+    if (isTaskTrainingMode) {
+      moveTaskTrainingVariant(-1);
+      return;
+    }
     if (currentTask === 1) {
       return;
     }
@@ -641,6 +717,10 @@ export default function PracticePage() {
   };
 
   const handleTaskResultContinue = () => {
+    if (isTaskTrainingMode) {
+      setCurrentStage(STAGES.PREP);
+      return;
+    }
     if (currentTask === 1) {
       goToTask(2);
       return;
@@ -657,16 +737,72 @@ export default function PracticePage() {
       return;
     }
     resetAllAnswers(selectedTest);
-    setCurrentTask(1);
+    setCurrentTask(isTaskTrainingMode ? selectedTaskNumber : 1);
     setCurrentStage(STAGES.PREP);
     setActiveQuestionIndex(0);
-    setRecordTimerStarted(false);
     setInfo("");
     setError("");
     setAiFeedback(null);
     setAiProgress("");
     setAiEvaluating(false);
     setAiAutoAttempted(false);
+    setAiAutoTaskAttempts({});
+  };
+
+  const selectPracticeMode = (mode) => {
+    stopRecordingWithAction(() => {
+      setPracticeMode(mode);
+      setCurrentTask(mode === PRACTICE_MODES.TASK ? selectedTaskNumber : 1);
+      setCurrentStage(STAGES.PREP);
+      setActiveQuestionIndex(0);
+      setInfo("");
+      setError("");
+      setAiFeedback(null);
+      setAiAutoAttempted(false);
+      setAiAutoTaskAttempts({});
+      if (selectedTest) {
+        resetAllAnswers(selectedTest);
+      }
+    });
+  };
+
+  const selectTaskTrainingNumber = (taskNumber) => {
+    stopRecordingWithAction(() => {
+      setPracticeMode(PRACTICE_MODES.TASK);
+      setSelectedTaskNumber(taskNumber);
+      setCurrentTask(taskNumber);
+      setCurrentStage(STAGES.PREP);
+      setActiveQuestionIndex(0);
+      setInfo("");
+      setError("");
+      setAiFeedback(null);
+      setAiAutoAttempted(false);
+      setAiAutoTaskAttempts({});
+      if (selectedTest) {
+        resetAllAnswers(selectedTest);
+      }
+    });
+  };
+
+  const selectTrainingTest = (testId) => {
+    stopRecordingWithAction(() => {
+      setSelectedTestId(testId);
+    });
+  };
+
+  const moveTaskTrainingVariant = (direction) => {
+    if (!tests.length || selectedTestIndex < 0) {
+      return;
+    }
+
+    const nextIndex = Math.min(
+      tests.length - 1,
+      Math.max(0, selectedTestIndex + direction)
+    );
+    const nextTest = tests[nextIndex];
+    if (nextTest) {
+      selectTrainingTest(nextTest.id);
+    }
   };
 
   const transcribeAnswerBlob = useCallback(async (blob, fileName) => {
@@ -692,7 +828,7 @@ export default function PracticePage() {
     });
   }, []);
 
-  const runAiEvaluation = useCallback(async () => {
+  const runAiEvaluation = useCallback(async ({ onlyTask = null } = {}) => {
     if (!selectedTest) {
       return;
     }
@@ -700,8 +836,15 @@ export default function PracticePage() {
       setError("AI-проверка доступна только после входа в PRO-аккаунт.");
       return;
     }
-    if (!hasRecordedAnswers) {
-      setError("Сначала запишите ответы, затем запустите AI-проверку.");
+    const targetTasks = onlyTask ? [onlyTask] : [1, 2, 3];
+    const hasTargetAnswer =
+      (!onlyTask && hasRecordedAnswers) ||
+      (onlyTask === 1 && task1Answer.blob) ||
+      (onlyTask === 2 && task2AnsweredCount > 0) ||
+      (onlyTask === 3 && task3Answer.blob);
+
+    if (!hasTargetAnswer) {
+      setError("Сначала запишите ответ, затем запустите AI-проверку.");
       return;
     }
 
@@ -720,12 +863,14 @@ export default function PracticePage() {
     setInfo("");
 
     try {
-      let task1Feedback = toAiTaskFeedback(null, "", 0);
-      let task3Feedback = toAiTaskFeedback(null, "", 0);
-      let task1Proof = "";
-      let task3Proof = "";
+      let task1Feedback = onlyTask ? aiFeedback?.task1 || toAiTaskFeedback(null, "", task1Score) : toAiTaskFeedback(null, "", 0);
+      let task2Feedback = onlyTask ? aiFeedback?.task2 || toAiTaskFeedback(null, "", task2Score) : toAiTaskFeedback(null, "", 0);
+      let task3Feedback = onlyTask ? aiFeedback?.task3 || toAiTaskFeedback(null, "", task3Score) : toAiTaskFeedback(null, "", 0);
+      let task1Proof = aiFeedback?.evaluationProof?.task1 || "";
+      let task2Proof = aiFeedback?.evaluationProof?.task2 || [];
+      let task3Proof = aiFeedback?.evaluationProof?.task3 || "";
 
-      if (task1Answer.blob) {
+      if (targetTasks.includes(1) && task1Answer.blob) {
         setAiProgress("AI: проверяем задание 1...");
         const transcript = await transcribeAnswerBlob(task1Answer.blob, "task1.webm");
         const evalResult = await evaluateTranscript({
@@ -740,7 +885,8 @@ export default function PracticePage() {
 
       const questionFeedback = [];
       const questions = selectedTest.tasks.task2.questions || [];
-      for (let index = 0; index < questions.length; index += 1) {
+      if (targetTasks.includes(2)) {
+        for (let index = 0; index < questions.length; index += 1) {
         const question = questions[index];
         const answer = task2Answers[index];
         if (!answer?.blob) {
@@ -786,34 +932,38 @@ export default function PracticePage() {
         }
       }
 
-      const task2Count = questions.length || 1;
-      const task2ScoreValue = roundOne(
-        questionFeedback.reduce((sum, item) => sum + Number(item.score || 0), 0) / task2Count
-      );
-      const task2ContentValue = roundOne(
-        questionFeedback.reduce((sum, item) => sum + Number(item.contentScore || 0), 0) / task2Count
-      );
-      const task2GrammarValue = roundOne(
-        questionFeedback.reduce((sum, item) => sum + Number(item.grammarScore || 0), 0) / task2Count
-      );
-      const task2Feedback = {
-        score: task2ScoreValue,
-        contentScore: task2ContentValue,
-        grammarScore: task2GrammarValue,
-        errors: compactUnique(questionFeedback.flatMap((item) => item.errors || []), 8),
-        recommendations: compactUnique(
-          questionFeedback.flatMap((item) => item.recommendations || []),
-          8
-        ),
-        improvedAnswer: "",
-        transcript: questionFeedback
-          .filter((item) => item.transcript)
-          .map((item) => `Q${item.questionIndex}: ${item.transcript}`)
-          .join("\n"),
-        questions: questionFeedback,
-      };
+        const task2Count = questions.length || 1;
+        const task2ScoreValue = roundOne(
+          questionFeedback.reduce((sum, item) => sum + Number(item.score || 0), 0) / task2Count
+        );
+        const task2ContentValue = roundOne(
+          questionFeedback.reduce((sum, item) => sum + Number(item.contentScore || 0), 0) / task2Count
+        );
+        const task2GrammarValue = roundOne(
+          questionFeedback.reduce((sum, item) => sum + Number(item.grammarScore || 0), 0) / task2Count
+        );
+        task2Feedback = {
+          score: task2ScoreValue,
+          contentScore: task2ContentValue,
+          grammarScore: task2GrammarValue,
+          errors: compactUnique(questionFeedback.flatMap((item) => item.errors || []), 8),
+          recommendations: compactUnique(
+            questionFeedback.flatMap((item) => item.recommendations || []),
+            8
+          ),
+          improvedAnswer: "",
+          transcript: questionFeedback
+            .filter((item) => item.transcript)
+            .map((item) => `Q${item.questionIndex}: ${item.transcript}`)
+            .join("\n"),
+          questions: questionFeedback,
+        };
+        task2Proof = questionFeedback
+          .map((item) => String(item.evaluationProof || ""))
+          .filter(Boolean);
+      }
 
-      if (task3Answer.blob) {
+      if (targetTasks.includes(3) && task3Answer.blob) {
         setAiProgress("AI: проверяем задание 3...");
         const transcript = await transcribeAnswerBlob(task3Answer.blob, "task3.webm");
         const evalResult = await evaluateTranscript({
@@ -844,9 +994,7 @@ export default function PracticePage() {
         overallScore: evaluatedOverall,
         evaluationProof: {
           task1: task1Proof,
-          task2: questionFeedback
-            .map((item) => String(item.evaluationProof || ""))
-            .filter(Boolean),
+          task2: task2Proof,
           task3: task3Proof,
         },
         globalErrors: compactUnique(
@@ -862,7 +1010,11 @@ export default function PracticePage() {
           10
         ),
       });
-      setInfo(`AI-проверка завершена. Итоговый AI-балл: ${evaluatedOverall.toFixed(1)} / 5`);
+      setInfo(
+        onlyTask
+          ? `AI-проверка задания ${onlyTask} завершена.`
+          : `AI-проверка завершена. Итоговый AI-балл: ${evaluatedOverall.toFixed(1)} / 5`
+      );
     } catch (evaluateError) {
       setError(normalizeAiErrorMessage(evaluateError.message || "Не удалось выполнить AI-проверку."));
     } finally {
@@ -871,12 +1023,17 @@ export default function PracticePage() {
     }
   }, [
     canUseAi,
+    aiFeedback,
     evaluateTranscript,
     hasRecordedAnswers,
     selectedTest,
     task1Answer.blob,
+    task1Score,
     task2Answers,
+    task2AnsweredCount,
+    task2Score,
     task3Answer.blob,
+    task3Score,
     transcribeAnswerBlob,
   ]);
 
@@ -900,6 +1057,32 @@ export default function PracticePage() {
     currentStage,
     hasRecordedAnswers,
     runAiEvaluation,
+  ]);
+
+  useEffect(() => {
+    if (currentStage !== STAGES.TASK_RESULT) {
+      return;
+    }
+    if (!canUseAi || aiEvaluating || !hasCurrentTaskAnswer) {
+      return;
+    }
+
+    const attemptKey = `${selectedTestId}:task${currentTask}`;
+    if (aiAutoTaskAttempts[attemptKey]) {
+      return;
+    }
+
+    setAiAutoTaskAttempts((prev) => ({ ...prev, [attemptKey]: true }));
+    runAiEvaluation({ onlyTask: currentTask });
+  }, [
+    aiAutoTaskAttempts,
+    aiEvaluating,
+    canUseAi,
+    currentStage,
+    currentTask,
+    hasCurrentTaskAnswer,
+    runAiEvaluation,
+    selectedTestId,
   ]);
 
   const saveAttempt = async () => {
@@ -986,7 +1169,7 @@ export default function PracticePage() {
             <div className="flex flex-wrap gap-2">
               <select
                 value={selectedTestId}
-                onChange={(event) => setSelectedTestId(event.target.value)}
+                onChange={(event) => selectTrainingTest(event.target.value)}
                 className="field max-w-xs text-sm"
               >
                 {tests.map((test) => (
@@ -1002,7 +1185,88 @@ export default function PracticePage() {
           </div>
 
           <div className="training-flow-wrap">
-            <TaskStepper currentTask={currentTask} currentStage={currentStage} />
+            <div className="practice-mode-panel">
+              <div className="practice-mode-tabs" aria-label="Режим тренировки">
+                <button
+                  type="button"
+                  onClick={() => selectPracticeMode(PRACTICE_MODES.VARIANT)}
+                  className={practiceMode === PRACTICE_MODES.VARIANT ? "active" : ""}
+                >
+                  Тренировка вариантов
+                </button>
+                <button
+                  type="button"
+                  onClick={() => selectPracticeMode(PRACTICE_MODES.TASK)}
+                  className={practiceMode === PRACTICE_MODES.TASK ? "active" : ""}
+                >
+                  Тренировка по заданиям
+                </button>
+              </div>
+
+              {isTaskTrainingMode && (
+                <div className="task-training-tools">
+                  <div className="task-choice-grid">
+                    {TASK_OPTIONS.map((task) => (
+                      <button
+                        key={task.id}
+                        type="button"
+                        onClick={() => selectTaskTrainingNumber(task.id)}
+                        className={`task-choice-card ${selectedTaskNumber === task.id ? "active" : ""}`}
+                      >
+                        <strong>{task.title}</strong>
+                        <span>{task.description}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="task-variant-picker">
+                    <button
+                      type="button"
+                      onClick={() => moveTaskTrainingVariant(-1)}
+                      disabled={selectedTestIndex <= 0}
+                      className="btn btn-outline text-sm"
+                    >
+                      Предыдущее
+                    </button>
+                    <select
+                      value={selectedTestId}
+                      onChange={(event) => selectTrainingTest(event.target.value)}
+                      className="field text-sm"
+                    >
+                      {tests.map((test, index) => (
+                        <option key={`task-pick-${test.id}`} value={test.id}>
+                          #{index + 1} - {test.title}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => moveTaskTrainingVariant(1)}
+                      disabled={selectedTestIndex >= tests.length - 1}
+                      className="btn btn-outline text-sm"
+                    >
+                      Следующее
+                    </button>
+                  </div>
+
+                  <div className="task-number-grid" aria-label={`Номера вариантов для задания ${selectedTaskNumber}`}>
+                    {tests.map((test, index) => (
+                      <button
+                        key={`task-number-${test.id}`}
+                        type="button"
+                        onClick={() => selectTrainingTest(test.id)}
+                        className={`task-number-button ${test.id === selectedTestId ? "active" : ""}`}
+                        title={`${test.title} [${test.access}]`}
+                      >
+                        {index + 1}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {!isTaskTrainingMode && <TaskStepper currentTask={currentTask} currentStage={currentStage} />}
 
             {currentStage !== STAGES.FINAL_RESULT && <StageStepper currentStage={currentStage} />}
 
@@ -1017,11 +1281,6 @@ export default function PracticePage() {
                       Прочитайте текст вслух. Старайтесь говорить ровно и внятно.
                     </p>
                     <p className="exam-text-passage">{selectedTest.tasks.task1.readingText}</p>
-                    <ReferenceBox
-                      title="Эталон задания 1"
-                      text={selectedTest.tasks.task1.referenceText || selectedTest.tasks.task1.readingText || ""}
-                      audioUrl={resolveMediaUrl(backendUrl, selectedTest.tasks.task1.referenceAudioUrl)}
-                    />
                   </>
                 )}
 
@@ -1066,11 +1325,6 @@ export default function PracticePage() {
                             className="mt-3"
                           />
                         )}
-                        <ReferenceBox
-                          title={`Эталон вопроса ${activeQuestionIndex + 1}`}
-                          text={currentQuestion.referenceText || ""}
-                          audioUrl={resolveMediaUrl(backendUrl, currentQuestion.referenceAudioUrl)}
-                        />
                         {task2Answers[activeQuestionIndex]?.url && (
                           <audio
                             controls
@@ -1094,21 +1348,8 @@ export default function PracticePage() {
                         <li key={`${item}-${index}`}>{item}</li>
                       ))}
                     </ul>
-                    <ReferenceBox
-                      title="Эталон задания 3"
-                      text={selectedTest.tasks.task3.referenceText || ""}
-                      audioUrl={resolveMediaUrl(backendUrl, selectedTest.tasks.task3.referenceAudioUrl)}
-                    />
                   </>
                 )}
-
-                <div className="exam-ai-note">
-                  <p className="question-card-label">Как AI оценивает ответ</p>
-                  <p className="exam-subtle">
-                    После записи система делает расшифровку речи и сравнивает ваш ответ с заданием и эталоном
-                    (смысл, грамматика, точность). Итоговый балл по каждому заданию: от 0 до 5.
-                  </p>
-                </div>
 
                 {(currentStage === STAGES.PREP || currentStage === STAGES.RECORD) && (
                   <div className="exam-timer-block">
@@ -1116,9 +1357,6 @@ export default function PracticePage() {
                     <p className="exam-timer-label">
                       {currentStage === STAGES.PREP ? "Время на подготовку" : "Время на ответ"}
                     </p>
-                    {currentStage === STAGES.RECORD && !recordTimerStarted && (
-                      <p className="exam-subtle mt-1">Отсчет начнется после нажатия на микрофон.</p>
-                    )}
                   </div>
                 )}
 
@@ -1153,6 +1391,12 @@ export default function PracticePage() {
 
                 {currentStage === STAGES.TASK_RESULT && (
                   <div className="task-result-box">
+                    {aiEvaluating && (
+                      <p className="status-warning rounded-xl p-3 text-sm">
+                        {aiProgress || `AI проверяет задание ${currentTask}...`}
+                      </p>
+                    )}
+
                     {currentTask === 1 && (
                       <>
                         <p className="exam-subtle">
@@ -1161,6 +1405,13 @@ export default function PracticePage() {
                             : "Запись не обнаружена. Можно пройти задание заново."}
                         </p>
                         {task1Answer.url && <audio controls src={task1Answer.url} className="mt-3 w-full" />}
+                        <ReferencePanel
+                          backendUrl={backendUrl}
+                          title="Эталон задания 1"
+                          text={selectedTest.tasks.task1.referenceText || selectedTest.tasks.task1.readingText}
+                          audioUrl={selectedTest.tasks.task1.referenceAudioUrl}
+                        />
+                        <AiFeedbackBlock feedback={currentTaskFeedback} title="AI-разбор задания 1" />
                       </>
                     )}
 
@@ -1175,14 +1426,32 @@ export default function PracticePage() {
                               <p className="task2-result-title">
                                 Вопрос {index + 1}: {question.text}
                               </p>
+                              {question.audioUrl && (
+                                <AudioLine
+                                  backendUrl={backendUrl}
+                                  src={question.audioUrl}
+                                  label="Аудио вопроса"
+                                />
+                              )}
                               {task2Answers[index]?.url ? (
                                 <audio controls src={task2Answers[index].url} className="mt-2 w-full" />
                               ) : (
                                 <p className="exam-subtle">Ответ не записан</p>
                               )}
+                              <ReferencePanel
+                                backendUrl={backendUrl}
+                                title={`Эталон ответа ${index + 1}`}
+                                text={question.referenceText}
+                                audioUrl={question.referenceAudioUrl}
+                              />
+                              <AiFeedbackBlock
+                                feedback={currentTaskFeedback?.questions?.[index]}
+                                title={`AI-разбор ответа ${index + 1}`}
+                              />
                             </div>
                           ))}
                         </div>
+                        <AiFeedbackBlock feedback={currentTaskFeedback} title="AI-разбор задания 2" />
                       </>
                     )}
 
@@ -1194,6 +1463,13 @@ export default function PracticePage() {
                             : "Запись не обнаружена. Можно пройти задание заново."}
                         </p>
                         {task3Answer.url && <audio controls src={task3Answer.url} className="mt-3 w-full" />}
+                        <ReferencePanel
+                          backendUrl={backendUrl}
+                          title="Эталон задания 3"
+                          text={selectedTest.tasks.task3.referenceText}
+                          audioUrl={selectedTest.tasks.task3.referenceAudioUrl}
+                        />
+                        <AiFeedbackBlock feedback={currentTaskFeedback} title="AI-разбор задания 3" />
                       </>
                     )}
                   </div>
@@ -1205,19 +1481,12 @@ export default function PracticePage() {
                       <button
                         type="button"
                         onClick={handlePrepBack}
-                        disabled={currentTask === 1}
+                        disabled={isTaskTrainingMode ? selectedTestIndex <= 0 : currentTask === 1}
                         className="btn btn-outline text-sm"
                       >
-                        Назад
+                        {isTaskTrainingMode ? "Предыдущий номер" : "Назад"}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRecordTimerStarted(false);
-                          setCurrentStage(STAGES.RECORD);
-                        }}
-                        className="btn btn-primary text-sm"
-                      >
+                      <button type="button" onClick={() => setCurrentStage(STAGES.RECORD)} className="btn btn-primary text-sm">
                         Перейти к записи
                       </button>
                     </>
@@ -1245,8 +1514,32 @@ export default function PracticePage() {
                       <button type="button" onClick={restartCurrentTask} className="btn btn-outline text-sm">
                         Пройти заново это задание
                       </button>
+                      {canUseAi && (
+                        <button
+                          type="button"
+                          onClick={() => runAiEvaluation({ onlyTask: currentTask })}
+                          disabled={aiEvaluating}
+                          className="btn btn-outline text-sm"
+                        >
+                          {aiEvaluating ? "AI проверяет..." : "Проверить это задание AI"}
+                        </button>
+                      )}
+                      {isTaskTrainingMode && (
+                        <button
+                          type="button"
+                          onClick={() => moveTaskTrainingVariant(1)}
+                          disabled={selectedTestIndex >= tests.length - 1}
+                          className="btn btn-outline text-sm"
+                        >
+                          Следующий номер
+                        </button>
+                      )}
                       <button type="button" onClick={handleTaskResultContinue} className="btn btn-primary text-sm">
-                        {currentTask < 3 ? "К следующему заданию" : "К итогам варианта"}
+                        {isTaskTrainingMode
+                          ? "Повторить это задание"
+                          : currentTask < 3
+                            ? "К следующему заданию"
+                            : "К итогам варианта"}
                       </button>
                     </>
                   )}
@@ -1318,7 +1611,7 @@ export default function PracticePage() {
 
                 {aiFeedback && (
                   <div className="task-result-box mt-4">
-                    <p className="question-card-label">AI feedback</p>
+                    <p className="question-card-label">AI-разбор</p>
                     <div className="task2-result-list">
                       {[1, 2, 3].map((taskNo) => {
                         const key = `task${taskNo}`;

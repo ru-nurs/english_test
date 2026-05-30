@@ -20,12 +20,17 @@ Create `backend/.env`:
 (`backend/.env.example` is provided as a full template)
 
 ```env
+AI_PROVIDER=groq
 GROQ_API_KEY=your_key_here
 PORT=5000
 FRONTEND_ORIGIN=http://localhost:3000
 SUPABASE_DB_URL=postgresql://...
 GROQ_ANALYZE_MODEL=llama-3.3-70b-versatile
 GROQ_GENERATE_MODEL=llama-3.3-70b-versatile
+GEMINI_API_KEY=your_gemini_key_here
+GEMINI_ANALYZE_MODEL=gemini-2.5-flash
+GEMINI_GENERATE_MODEL=gemini-2.5-flash
+GEMINI_TRANSCRIBE_MODEL=gemini-2.5-flash
 TTS_MODEL=playai-tts
 TTS_VOICE=Fritz-PlayAI
 ADMIN_BOOTSTRAP_KEY=change_me_for_first_admin
@@ -33,6 +38,8 @@ ADMIN_BOOTSTRAP_ENABLED=true
 MEDIA_SIGNING_SECRET=change_me_media_signing
 EVALUATION_TOKEN_SECRET=change_me_eval_proofs
 ```
+
+Set `AI_PROVIDER=gemini` to use Gemini for STT, AI evaluation, and AI variant generation. Groq TTS still uses `GROQ_TTS_API_KEY` or `GROQ_API_KEY`.
 
 Bootstrap works only while there are no admin users yet.
 Check availability via `GET /api/auth/bootstrap-status`.
