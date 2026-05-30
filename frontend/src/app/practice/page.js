@@ -188,24 +188,26 @@ function AudioLine({ backendUrl, src, label = "Эталонное аудио" })
   );
 }
 
-function ReferencePanel({ backendUrl, title = "Эталон", text, audioUrl }) {
-  const hasText = Boolean(String(text || "").trim());
+function ReferencePanel({ backendUrl, title = "Эталон", text, audioUrl, showText = true }) {
+  const hasText = showText && Boolean(String(text || "").trim());
 
   return (
     <div className="reference-panel">
       <div className="reference-audio-body">
         <AudioLine backendUrl={backendUrl} src={audioUrl} />
       </div>
-      <details>
-        <summary>{title}</summary>
-        <div className="reference-panel-body">
-        {hasText ? (
-          <p className="reference-text">{text}</p>
-        ) : (
-          <p className="exam-subtle">Эталонный текст пока не добавлен.</p>
-        )}
-        </div>
-      </details>
+      {showText && (
+        <details>
+          <summary>{title}</summary>
+          <div className="reference-panel-body">
+            {hasText ? (
+              <p className="reference-text">{text}</p>
+            ) : (
+              <p className="exam-subtle">Эталонный текст пока не добавлен.</p>
+            )}
+          </div>
+        </details>
+      )}
     </div>
   );
 }
@@ -1407,9 +1409,8 @@ export default function PracticePage() {
                         {task1Answer.url && <audio controls src={task1Answer.url} className="mt-3 w-full" />}
                         <ReferencePanel
                           backendUrl={backendUrl}
-                          title="Эталон задания 1"
-                          text={selectedTest.tasks.task1.referenceText || selectedTest.tasks.task1.readingText}
                           audioUrl={selectedTest.tasks.task1.referenceAudioUrl}
+                          showText={false}
                         />
                         <AiFeedbackBlock feedback={currentTaskFeedback} title="AI-разбор задания 1" />
                       </>
