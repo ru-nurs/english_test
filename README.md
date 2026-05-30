@@ -1,97 +1,157 @@
 # OGE/EGE English Speaking Trainer
 
-Monorepo structure:
+Web trainer for the English speaking part of OGE/EGE-style exams. The app lets students practise full variants or individual tasks, record spoken answers, listen to reference audio, review reference texts, and receive AI feedback.
 
-- `frontend` - Next.js app (practice flow, profile, plans, admin)
-- `backend` - Express API (auth, tests, attempts, AI evaluation, admin CRUD)
+## Stack
 
+- Frontend: Next.js 16, React 19, Tailwind CSS
+- Backend: Express, PostgreSQL/Supabase or local storage, cookie auth
+- AI: Groq by default, optional Google Gemini for STT/evaluation/variant generation
+- Payments: YooKassa
+- Media: local or mounted storage for uploaded/generated audio
 
-## Backend start
+## Project Structure
+
+```text
+frontend/   Next.js app: practice flow, auth pages, profile, plans, admin UI
+backend/    Express API: auth, tests, attempts, billing, AI, media uploads
+```
+
+## Local Setup
+
+Install dependencies in both apps:
 
 ```bash
 cd backend
 npm install
+
+cd ../frontend
+npm install
+```
+
+Create backend env:
+
+```bash
+copy backend\.env.example backend\.env
+```
+
+Create frontend env:
+
+```bash
+echo NEXT_PUBLIC_BACKEND_URL=http://localhost:5000 > frontend\.env.local
+```
+
+Start backend first:
+
+```bash
+cd backend
 npm run dev
 ```
 
-`npm run dev` starts the API directly (`node server.js`) on port `5000`.
-
-Create `backend/.env`:
-(`backend/.env.example` is provided as a full template)
-
-```env
-AI_PROVIDER=groq
-GROQ_API_KEY=your_key_here
-PORT=5000
-FRONTEND_ORIGIN=http://localhost:3000
-SUPABASE_DB_URL=postgresql://...
-GROQ_ANALYZE_MODEL=llama-3.3-70b-versatile
-GROQ_GENERATE_MODEL=llama-3.3-70b-versatile
-GEMINI_API_KEY=your_gemini_key_here
-GEMINI_ANALYZE_MODEL=gemini-2.5-flash
-GEMINI_GENERATE_MODEL=gemini-2.5-flash
-GEMINI_TRANSCRIBE_MODEL=gemini-2.5-flash
-TTS_MODEL=playai-tts
-TTS_VOICE=Fritz-PlayAI
-ADMIN_BOOTSTRAP_KEY=change_me_for_first_admin
-ADMIN_BOOTSTRAP_ENABLED=true
-MEDIA_SIGNING_SECRET=change_me_media_signing
-EVALUATION_TOKEN_SECRET=change_me_eval_proofs
-```
-
-Set `AI_PROVIDER=gemini` to use Gemini for STT, AI evaluation, and AI variant generation. Groq TTS still uses `GROQ_TTS_API_KEY` or `GROQ_API_KEY`.
-
-Bootstrap works only while there are no admin users yet.
-Check availability via `GET /api/auth/bootstrap-status`.
-
-## Frontend start
+Start frontend:
 
 ```bash
 cd frontend
-npm install
 npm run dev
 ```
 
-Important: start backend first, then frontend.  
-If backend is not running, browser requests to `http://localhost:5000/api/*` will fail with `ERR_CONNECTION_REFUSED`.
+Open `http://localhost:3000`.
 
-Optional frontend env (`frontend/.env.local`):
+## Backend Environment
+
+Minimum local `.env`:
 
 ```env
-NEXT_PUBLIC_BACKEND_URL=http://localhost:5000
+NODE_ENV=development
+PORT=5000
+FRONTEND_ORIGIN=http://localhost:3000
+
+SUPABASE_DB_URL=postgresql://...
+
+AI_PROVIDER=groq
+GROQ_API_KEY=your_groq_api_key
+GROQ_TTS_API_KEY=your_groq_tts_api_key_optional
+GROQ_GENERATE_MODEL=llama-3.3-70b-versatile
+GROQ_ANALYZE_MODEL=llama-3.3-70b-versatile
+
+TTS_MODEL=canopylabs/orpheus-v1-english
+TTS_VOICE=austin
+
+ADMIN_BOOTSTRAP_ENABLED=true
+ADMIN_BOOTSTRAP_KEY=replace_with_long_random_string_at_least_24_chars
+MEDIA_SIGNING_SECRET=replace_with_long_random_secret
+EVALUATION_TOKEN_SECRET=replace_with_long_random_secret
 ```
 
-## Main API routes
+Use `backend/.env.example` for the full list, including storage and YooKassa settings.
 
-- Auth:
-  - `GET /api/auth/bootstrap-status`
-  - `POST /api/auth/register`
-  - `POST /api/auth/login`
-  - `POST /api/auth/refresh`
-  - `POST /api/auth/logout`
-  - `GET /api/auth/me`
-  - `POST /api/auth/bootstrap-admin`
-- Billing:
-  - `POST /api/billing/yookassa/create-payment`
-  - `GET /api/billing/yookassa/payment/:paymentId/status`
-  - `POST /api/billing/yookassa/webhook`
+## Gemini Mode
+
+To move STT, AI evaluation, and AI variant generation from Groq to Google Gemini:
+
+```env
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_GENERATE_MODEL=gemini-2.5-flash
+GEMINI_ANALYZE_MODEL=gemini-2.5-flash
+GEMINI_TRANSCRIBE_MODEL=gemini-2.5-flash
+```
+
+Groq TTS remains configured separately through `GROQ_TTS_API_KEY` or `GROQ_API_KEY`.
+
+## Core Features
+
+- Full variant practice: tasks 1, 2, and 3 in sequence
+- Task-focused practice: choose task 1, 2, or 3 and train a specific variant number
+- Reference audio for model answers
+- Reference texts collapsed by default
+- AI feedback after each task for Pro/admin users
+- Final AI scoring and attempt saving
+- Admin test editor with manual audio upload and TTS generation
+- AI draft generation for new speaking variants
+- YooKassa payment flow for Pro access
+
+## Main API Routes
+
+- Auth: `GET /api/auth/me`, `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`
+- Bootstrap admin: `GET /api/auth/bootstrap-status`, `POST /api/auth/bootstrap-admin`
 - Tests: `GET /api/tests`, `GET /api/tests/:id`
-- STT (auth required): `POST /api/transcribe`
-- AI evaluation (Pro): `POST /api/evaluate`
+- Speech-to-text: `POST /api/transcribe`
+- AI evaluation: `POST /api/evaluate`
 - Attempts: `GET /api/attempts`, `POST /api/attempts`
-- Admin tests:
-  - `GET /api/admin/tests`
-  - `POST /api/admin/tests`
-  - `PUT /api/admin/tests/:id`
-  - `POST /api/admin/tests/:id/publish`
-  - `POST /api/admin/tests/:id/unpublish`
-  - `POST /api/admin/tests/generate-ai`
-  - `POST /api/admin/tests/:id/generate-audio`
-  - `POST /api/admin/tts/generate`
-  - `POST /api/admin/upload-audio`
-- Admin users:
-  - `GET /api/admin/users`
-  - `POST /api/admin/users/:id/role`
-  - `POST /api/admin/users/:id/pro`
-# test_upload
+- Billing: `POST /api/billing/yookassa/create-payment`, `GET /api/billing/yookassa/payment/:paymentId/status`, `POST /api/billing/yookassa/webhook`
+- Admin tests: `GET /api/admin/tests`, `POST /api/admin/tests`, `PUT /api/admin/tests/:id`, `POST /api/admin/tests/:id/publish`, `POST /api/admin/tests/:id/unpublish`, `DELETE /api/admin/tests/:id`
+- Admin AI/media: `POST /api/admin/tests/generate-ai`, `POST /api/admin/tests/generate-full`, `POST /api/admin/tests/:id/generate-audio`, `POST /api/admin/tts/generate`, `POST /api/admin/upload-audio`
+- Admin users: `GET /api/admin/users`, `POST /api/admin/users/:id/role`, `POST /api/admin/users/:id/pro`
 
+## Checks
+
+Backend syntax checks:
+
+```bash
+cd backend
+node --check src\ai.js
+node --check src\app.js
+node --check src\config.js
+```
+
+Frontend checks:
+
+```bash
+cd frontend
+npm run lint
+$env:NEXT_PUBLIC_BACKEND_URL='http://localhost:5000'; npm run build
+```
+
+## Deployment Notes
+
+- Set `FRONTEND_ORIGIN` to the deployed frontend origin.
+- Set `NEXT_PUBLIC_BACKEND_URL` in the frontend deployment to the backend URL.
+- Use persistent storage or `STORAGE_DIR`/`RENDER_DISK_MOUNT_PATH` for media and local data.
+- Set `COOKIE_SECURE=true` in production.
+- Disable admin bootstrap after creating the first admin:
+
+```env
+ADMIN_BOOTSTRAP_ENABLED=false
+```
