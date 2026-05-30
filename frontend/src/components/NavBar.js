@@ -143,6 +143,20 @@ export default function NavBar() {
     setMobileOpen(false);
   }, [pathname]);
 
+  const handleHomeClick = useCallback(
+    (event) => {
+      if (pathname !== "/") {
+        return;
+      }
+
+      event.preventDefault();
+      window.history.replaceState(null, "", "/");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      setMobileOpen(false);
+    },
+    [pathname],
+  );
+
   const handleLogout = async () => {
     try {
       await apiRequest("/api/auth/logout", {
@@ -162,7 +176,7 @@ export default function NavBar() {
     <header className="sticky top-0 z-50 border-b border-[var(--border)] bg-[var(--card)]/95 backdrop-blur">
       <div className="page-wrap">
         <div className="flex h-16 items-center justify-between gap-4">
-          <Link href="/" className="flex items-center gap-3">
+          <Link href="/" onClick={handleHomeClick} className="flex items-center gap-3">
             <LogoMark />
             <span className="font-medium text-[var(--foreground)]">SpeakEasy</span>
           </Link>
@@ -170,7 +184,12 @@ export default function NavBar() {
           <nav className="hidden items-center gap-1 md:flex">
             {!loading && !isAuthPage &&
               links.map((item) => (
-                <Link key={item.href} href={item.href} className={navItemClass(pathname === item.href)}>
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={item.href === "/" ? handleHomeClick : undefined}
+                  className={navItemClass(pathname === item.href)}
+                >
                   {item.label}
                 </Link>
               ))}
@@ -222,6 +241,7 @@ export default function NavBar() {
                   <Link
                     key={item.href}
                     href={item.href}
+                    onClick={item.href === "/" ? handleHomeClick : undefined}
                     className={`block rounded-lg px-3 py-2 ${
                       pathname === item.href
                         ? "bg-[var(--secondary)] text-[var(--foreground)]"
