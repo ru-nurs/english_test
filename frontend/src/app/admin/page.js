@@ -294,7 +294,7 @@ export default function AdminPage() {
 
   const [audioFile, setAudioFile] = useState(null);
   const [audioTargetPath, setAudioTargetPath] = useState("tasks.task1.referenceAudioUrl");
-  const [voice, setVoice] = useState("austin");
+  const [voice, setVoice] = useState("Kore");
   const [ttsText, setTtsText] = useState("");
   const [lastAudioUrl, setLastAudioUrl] = useState("");
 

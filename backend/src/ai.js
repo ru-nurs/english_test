@@ -212,6 +212,69 @@ async function requestGeminiContent({
   }
 }
 
+async function requestGeminiAudio({
+  apiKey,
+  model,
+  baseUrl = GEMINI_BASE_URL,
+  text,
+  voice,
+  timeout = 90000,
+}) {
+  const token = trimText(apiKey);
+  if (!token) {
+    throw new Error("TTS generation is disabled: GEMINI_API_KEY is missing.");
+  }
+
+  try {
+    const response = await axios.post(
+      `${trimText(baseUrl || GEMINI_BASE_URL).replace(/\/+$/, "")}/models/${normalizeGeminiModelName(
+        model
+      )}:generateContent`,
+      {
+        contents: [{ role: "user", parts: [{ text }] }],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: trimText(voice) || "Kore",
+              },
+            },
+          },
+        },
+      },
+      {
+        headers: {
+          "x-goog-api-key": token,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        timeout,
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+      }
+    );
+
+    const inlineData =
+      response.data?.candidates?.[0]?.content?.parts?.find((part) => part?.inlineData || part?.inline_data)
+        ?.inlineData ||
+      response.data?.candidates?.[0]?.content?.parts?.find((part) => part?.inlineData || part?.inline_data)
+        ?.inline_data;
+    const rawAudio = inlineData?.data;
+    if (!rawAudio) {
+      throw new Error("Gemini TTS returned no audio data.");
+    }
+
+    const audioBuffer = Buffer.from(rawAudio, "base64");
+    if (!audioBuffer.length) {
+      throw new Error("Gemini TTS returned an empty audio file.");
+    }
+    return audioBuffer;
+  } catch (error) {
+    throw new Error(parseGeminiHttpError(error, { scope: "Gemini TTS" }));
+  }
+}
+
 function normalizeAnalyzeResult(value) {
   const fallback = {
     score: 0,
@@ -579,6 +642,23 @@ function normalizeVoiceForModel(modelId, voice) {
   return cleanedVoice;
 }
 
+function normalizeVoiceForGemini(voice) {
+  const normalized = trimText(voice);
+  if (!normalized) {
+    return "Kore";
+  }
+  const lowered = normalized.toLowerCase();
+  if (
+    lowered === "austin" ||
+    lowered === "alloy" ||
+    lowered.includes("playai") ||
+    lowered.includes("orpheus")
+  ) {
+    return "Kore";
+  }
+  return normalized;
+}
+
 function splitLongSegment(segment, maxChars) {
   const normalized = String(segment || "").trim();
   if (!normalized) {
@@ -769,6 +849,30 @@ function mergeWavBuffers(buffers) {
   return output;
 }
 
+function pcm16ToWavBuffer(pcmBuffer, { channels = 1, sampleRate = 24000 } = {}) {
+  const pcmData = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
+  const header = Buffer.alloc(44);
+  const dataSize = pcmData.length;
+  const byteRate = sampleRate * channels * 2;
+  const blockAlign = channels * 2;
+
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, pcmData]);
+}
+
 function parseProviderError(error) {
   const fallbackMessage = String(error?.message || "TTS provider request failed.");
   const statusCode = error?.response?.status;
@@ -852,14 +956,34 @@ async function requestGroqSpeechChunk({
   }
 }
 
-async function generateSpeechWithGroq({ apiKey, model, voice, text, responseFormat }) {
+async function generateSpeechWithGroq({ apiKey, model, voice, text, responseFormat, provider, baseUrl }) {
   if (!apiKey) {
-    throw new Error("TTS generation is disabled: GROQ_TTS_API_KEY (or GROQ_API_KEY) is missing.");
+    throw new Error(
+      normalizeProvider(provider) === "gemini"
+        ? "TTS generation is disabled: GEMINI_API_KEY is missing."
+        : "TTS generation is disabled: GROQ_TTS_API_KEY (or GROQ_API_KEY) is missing."
+    );
   }
 
   const sourceText = String(text || "").trim();
   if (!sourceText) {
     throw new Error("Text is required for TTS generation.");
+  }
+
+  if (normalizeProvider(provider) === "gemini") {
+    const pcmAudio = await requestGeminiAudio({
+      apiKey,
+      model: model || "gemini-2.5-flash-preview-tts",
+      baseUrl,
+      text: sourceText,
+      voice: normalizeVoiceForGemini(voice),
+    });
+
+    return {
+      audioBuffer: pcm16ToWavBuffer(pcmAudio, { channels: 1, sampleRate: 24000 }),
+      extension: ".wav",
+      mimeType: "audio/wav",
+    };
   }
 
   const normalizedModel = String(model || ORPHEUS_MODEL_ENGLISH).trim();

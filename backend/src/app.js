@@ -83,6 +83,26 @@ function getAiTextConfig(kind) {
   };
 }
 
+function getTtsConfig() {
+  const provider = trimText(config.TTS_PROVIDER).toLowerCase() === "gemini" ? "gemini" : "groq";
+  if (provider === "gemini") {
+    return {
+      provider,
+      apiKey: config.GEMINI_API_KEY,
+      baseUrl: config.GEMINI_BASE_URL,
+      model: config.GEMINI_TTS_MODEL,
+      voice: config.GEMINI_TTS_VOICE,
+    };
+  }
+
+  return {
+    provider,
+    apiKey: config.GROQ_TTS_API_KEY || config.GROQ_API_KEY,
+    model: config.TTS_MODEL,
+    voice: config.TTS_VOICE,
+  };
+}
+
 function normalizeDisplayName(value, { fallback = "" } = {}) {
   const cleaned = trimText(value).replace(/\s+/g, " ").slice(0, 40);
   return cleaned || fallback;
@@ -609,10 +629,13 @@ async function generateAudioAssetsForTest({ test, overwrite = false, voice }) {
 
   for (const target of targets) {
     try {
+      const ttsConfig = getTtsConfig();
       const generated = await generateSpeechWithGroq({
-        apiKey: config.GROQ_TTS_API_KEY || config.GROQ_API_KEY,
-        model: config.TTS_MODEL,
-        voice,
+        provider: ttsConfig.provider,
+        apiKey: ttsConfig.apiKey,
+        model: ttsConfig.model,
+        voice: voice || ttsConfig.voice,
+        baseUrl: ttsConfig.baseUrl,
         text: target.text,
       });
 
@@ -1500,7 +1523,7 @@ async function createApp() {
     try {
       const tests = await repositories.listTests();
       const requestedSeedId = trimText(req.body?.seedTestId);
-      const voice = trimText(req.body?.voice) || config.TTS_VOICE;
+      const voice = trimText(req.body?.voice) || getTtsConfig().voice;
 
       const seedTest =
         (requestedSeedId && tests.find((item) => item.id === requestedSeedId)) ||
@@ -1559,7 +1582,8 @@ async function createApp() {
 
   app.post("/api/admin/tts/generate", auth.requireAdmin, adminGenerateRateLimit, async (req, res) => {
     const text = trimText(req.body?.text);
-    const voice = trimText(req.body?.voice) || config.TTS_VOICE;
+    const ttsConfig = getTtsConfig();
+    const voice = trimText(req.body?.voice) || ttsConfig.voice;
     const targetLabel = trimText(req.body?.target) || "custom";
 
     if (!text) {
@@ -1571,9 +1595,11 @@ async function createApp() {
 
     try {
       const generated = await generateSpeechWithGroq({
-        apiKey: config.GROQ_TTS_API_KEY || config.GROQ_API_KEY,
-        model: config.TTS_MODEL,
+        provider: ttsConfig.provider,
+        apiKey: ttsConfig.apiKey,
+        model: ttsConfig.model,
         voice,
+        baseUrl: ttsConfig.baseUrl,
         text,
       });
 
@@ -1611,7 +1637,7 @@ async function createApp() {
       }
 
       const overwrite = Boolean(req.body?.overwrite);
-      const voice = trimText(req.body?.voice) || config.TTS_VOICE;
+      const voice = trimText(req.body?.voice) || getTtsConfig().voice;
       const targets = collectAudioTargets(test, { overwrite });
       if (targets.length === 0) {
         return res.json({

@@ -68,14 +68,17 @@ FRONTEND_ORIGIN=http://localhost:3000
 
 SUPABASE_DB_URL=postgresql://...
 
-AI_PROVIDER=groq
-GROQ_API_KEY=your_groq_api_key
-GROQ_TTS_API_KEY=your_groq_tts_api_key_optional
-GROQ_GENERATE_MODEL=llama-3.3-70b-versatile
-GROQ_ANALYZE_MODEL=llama-3.3-70b-versatile
-
-TTS_MODEL=canopylabs/orpheus-v1-english
-TTS_VOICE=austin
+AI_PROVIDER=gemini
+TTS_PROVIDER=gemini
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_GENERATE_MODEL=gemini-2.5-flash
+GEMINI_ANALYZE_MODEL=gemini-2.5-flash
+GEMINI_TRANSCRIBE_MODEL=gemini-2.5-flash
+GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
+GEMINI_TTS_VOICE=Kore
+TTS_MODEL=gemini-2.5-flash-preview-tts
+TTS_VOICE=Kore
 
 ADMIN_BOOTSTRAP_ENABLED=true
 ADMIN_BOOTSTRAP_KEY=replace_with_long_random_string_at_least_24_chars
@@ -87,18 +90,23 @@ Use `backend/.env.example` for the full list, including storage and YooKassa set
 
 ## Gemini Mode
 
-To move STT, AI evaluation, and AI variant generation from Groq to Google Gemini:
+Use these variables to run STT, AI evaluation, AI variant generation, and TTS through Gemini:
 
 ```env
 AI_PROVIDER=gemini
+TTS_PROVIDER=gemini
 GEMINI_API_KEY=your_gemini_api_key
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_GENERATE_MODEL=gemini-2.5-flash
 GEMINI_ANALYZE_MODEL=gemini-2.5-flash
 GEMINI_TRANSCRIBE_MODEL=gemini-2.5-flash
+GEMINI_TTS_MODEL=gemini-2.5-flash-preview-tts
+GEMINI_TTS_VOICE=Kore
+TTS_MODEL=gemini-2.5-flash-preview-tts
+TTS_VOICE=Kore
 ```
 
-Groq TTS remains configured separately through `GROQ_TTS_API_KEY` or `GROQ_API_KEY`.
+Groq remains available as a fallback when `AI_PROVIDER=groq` and `TTS_PROVIDER=groq`.
 
 ## Core Features
 
